@@ -1,0 +1,54 @@
+flowchart TB
+    you(["🧑‍💻 You"])
+
+    subgraph talk ["🎙️ Where you talk"]
+        direction LR
+        bubble["💬 On the computer<br/><i>press ⌥ Space / Alt+Space,<br/>or click the face</i>"]
+        phone["📱 Phone in the dock<br/><i>tap to talk, or type</i>"]
+        alexa["🔵 Echo Pop · Alexa+<br/><i>when Amazon opens access</i>"]
+    end
+
+    subgraph server ["🧠 Dock server · one Python program"]
+        direction LR
+        brain["🤖 AI agent<br/><b>/api/voice</b><br/><i>Bedrock picks the tools</i>"]
+        mcp["🔌 MCP server<br/><b>/mcp</b><br/><i>28 tools · Streamable HTTP</i>"]
+        hub["🔀 Hub<br/><b>/ws/agent · /ws/phone</b><br/><i>live links to computer + screens</i>"]
+        brain == "MCP client<br/>tools/list · tools/call" ==> mcp
+        mcp ==> hub
+    end
+
+    subgraph cloud ["☁️ Cloud"]
+        direction LR
+        bedrock["✨ Amazon Bedrock<br/><i>Nova 2 Lite · Claude Haiku 4.5</i>"]
+        google["📅 ✉️ Google<br/><i>Calendar · Gmail</i>"]
+    end
+
+    subgraph computer ["💻 Your Mac or PC"]
+        direction LR
+        agent["🛠️ Desktop agent<br/><i>menus · files · windows · arrow</i>"]
+        apps["🗂️ Your apps & files"]
+        agent ==> apps
+    end
+
+    you --> bubble & phone & alexa
+    bubble & phone -- "what you said" --> brain
+    alexa -. "MCP over HTTPS" .-> mcp
+    brain <-. "AI" .-> bedrock
+    mcp <-. "your data" .-> google
+    hub == "jobs ⇄ results" ==> agent
+    hub -. "cards · timer · face" .-> talk
+
+    classDef person fill:#ffe9a8,stroke:#e0a800,color:#3d2c00,stroke-width:2px
+    classDef talky fill:#e3f2fd,stroke:#1e88e5,color:#0d2b45
+    classDef core fill:#ede7f6,stroke:#7e57c2,color:#2a1b4d,stroke-width:2px
+    classDef cloudy fill:#e0f7fa,stroke:#00acc1,color:#003b44
+    classDef pc fill:#e8f5e9,stroke:#43a047,color:#123d17
+    class you person
+    class bubble,phone,alexa talky
+    class brain,mcp,hub core
+    class bedrock,google cloudy
+    class agent,apps pc
+    style talk fill:#f5faff,stroke:#90caf9,stroke-width:1px
+    style server fill:#faf7ff,stroke:#b39ddb,stroke-width:2px
+    style cloud fill:#f2fdfe,stroke:#80deea,stroke-width:1px
+    style computer fill:#f4fbf4,stroke:#a5d6a7,stroke-width:1px

@@ -1,0 +1,24 @@
+sequenceDiagram
+    autonumber
+    actor U as 🧑 You
+    participant B as 💬 Bubble / 📱 phone
+    participant V as 🤖 AI agent
+    participant M as 🔌 MCP: app_help
+    participant D as 🛠️ Desktop agent
+    participant L as ✨ Bedrock
+
+    U->>B: press ⌥ Space · "where's the split tool?"
+    B->>V: POST /api/voice
+    V->>L: words + tools + "app in front: iMovie"
+    L-->>V: call app_help("where's the split tool?")
+    V->>M: tools/call app_help
+    M->>D: app_menus
+    D-->>M: every menu item + shortcut (≈0.3 s)
+    M->>M: keyword match (or Haiku picks): Modify › Split Clip ⌘B
+    M->>D: highlight_menu → the orange arrow on screen
+    M->>B: card "Split Clip ⌘B" (both screens)
+    M-->>V: "Split Clip is in the Modify menu. Or press Command B."
+    V-->>B: reply, spoken, with the card
+    U->>B: "do it"
+    B->>V: POST /api/voice
+    V->>M: do_app_action → D: press_menu → ✓ card + sound

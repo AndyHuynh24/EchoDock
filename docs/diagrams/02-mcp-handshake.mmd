@@ -1,0 +1,12 @@
+sequenceDiagram
+    autonumber
+    participant C as 🤖 MCP client<br/>(Alexa+ or Dock's agent)
+    participant S as 🔌 Dock MCP server
+
+    C->>S: initialize (protocolVersion 2025-11-25)
+    S-->>C: server info + "I have tools"
+    C->>S: tools/list
+    S-->>C: 28 tools: name · description · input schema
+    Note over C: The AI reads the descriptions<br/>and picks a tool for what you said
+    C->>S: tools/call open_folder {"name": "downloads"}
+    S-->>C: "Opened your Downloads folder."

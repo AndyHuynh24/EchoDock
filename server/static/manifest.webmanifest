@@ -1,0 +1,17 @@
+{
+  "name": "Dock",
+  "short_name": "Dock",
+  "description": "Alexa+ for your desk: ask out loud and Dock controls your Mac and helps inside your apps.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#0f1823",
+  "theme_color": "#0f1823",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,23 @@
+[project]
+name = "dock-agent"
+version = "0.1.0"
+description = "Dock desktop agent: does the actual work on the computer (Mac or Windows) when the Dock server asks."
+requires-python = ">=3.12"
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "sounddevice>=0.5.6",
+    "websockets",
+    # Mac: Apple's frameworks (Accessibility, the menu bar, WebKit for the bubble).
+    "pyobjc-framework-applicationservices>=12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-avfoundation>=12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-cocoa>=12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-quartz>=12.2.2; sys_platform == 'darwin'",
+    "pyobjc-framework-webkit>=12.2.2; sys_platform == 'darwin'",
+    # Windows: Win32 and COM, UI Automation, the bubble (WebView2), the tray icon, pictures, PDFs.
+    "pywin32>=308; sys_platform == 'win32'",
+    "uiautomation>=2.0.29; sys_platform == 'win32'",
+    "pywebview>=6.2.1; sys_platform == 'win32'",
+    "pystray>=0.19.5; sys_platform == 'win32'",
+    "pillow>=11.0; sys_platform == 'win32'",
+    "pypdf>=5.0; sys_platform == 'win32'",
+]

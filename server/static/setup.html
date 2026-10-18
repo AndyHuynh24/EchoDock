@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up Dock</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <style>
+    :root {
+      --bg: #0f1823; --bg-deep: #070c12; --fg: #f3f7fa; --muted: #8fa1b3;
+      --card: rgba(30, 46, 70, 0.9); --line: rgba(255, 255, 255, 0.08);
+      --cyan: #00caff; --blue: #1e6bff; --orange: #ff9900; --green: #2fd67b;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--fg);
+      background: radial-gradient(110% 70% at 50% 0%, #1a2a40 0%, var(--bg) 55%, var(--bg-deep) 100%) fixed;
+      font-family: "Amazon Ember", system-ui, -apple-system, sans-serif;
+    }
+    main { max-width: 46rem; margin: 0 auto; padding: 36px 16px 60px; }
+    header { display: flex; align-items: center; gap: 18px; margin-bottom: 22px; }
+    header svg { width: 84px; flex: none; }
+    h1 { font-size: 30px; margin: 0 0 4px; }
+    .lead { color: var(--muted); margin: 0; }
+    .progress { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); margin: 0 0 22px; overflow: hidden; }
+    .progress div { height: 100%; width: 0; background: linear-gradient(90deg, var(--cyan), var(--blue)); transition: width 0.5s; box-shadow: 0 0 12px rgba(0, 202, 255, 0.6); }
+    .step {
+      display: grid; grid-template-columns: 36px 1fr; gap: 14px;
+      padding: 18px 20px; margin-bottom: 12px; border-radius: 20px;
+      background: var(--card); border: 1px solid var(--line);
+      transition: border-color 0.3s, opacity 0.3s;
+    }
+    .step.current { border-color: rgba(0, 202, 255, 0.6); box-shadow: 0 0 0 4px rgba(0, 202, 255, 0.08); }
+    .step.done .title { color: var(--muted); }
+    .mark { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: rgba(255, 255, 255, 0.08); color: var(--muted); }
+    .done .mark { background: var(--green); color: #052313; }
+    .current .mark { background: var(--cyan); color: #00141f; }
+    .title { font-weight: 700; font-size: 18px; }
+    .detail { color: var(--muted); font-size: 15px; margin-top: 4px; line-height: 1.5; }
+    .detail b { color: var(--fg); }
+    code { background: rgba(0, 0, 0, 0.35); padding: 2px 7px; border-radius: 6px; font-size: 13px; color: var(--fg); }
+    button { margin-top: 12px; padding: 10px 18px; border: none; border-radius: 999px; background: var(--cyan); color: #00141f; font: inherit; font-weight: 700; cursor: pointer; }
+    .pair { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+    #qr { background: white; padding: 12px; border-radius: 16px; width: 220px; flex: none; }
+    #qr svg { width: 100%; height: auto; display: block; }
+    .pair ol { margin: 0; padding-left: 20px; color: var(--muted); font-size: 15px; line-height: 1.7; }
+    h2.section { font-size: 15px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 26px 4px 10px; }
+    .setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; margin-bottom: 10px; border-radius: 18px; background: var(--card); border: 1px solid var(--line); }
+    .switch { position: relative; width: 48px; height: 28px; flex: none; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch span { position: absolute; inset: 0; border-radius: 999px; background: rgba(255,255,255,0.15); transition: background 0.2s; cursor: pointer; }
+    .switch span::before { content: ""; position: absolute; width: 22px; height: 22px; left: 3px; top: 3px; border-radius: 50%; background: white; transition: transform 0.2s; }
+    .switch input:checked + span { background: var(--cyan); }
+    .switch input:checked + span::before { transform: translateX(20px); }
+    .secondary-button { background: rgba(255, 255, 255, 0.1); color: var(--fg); }
+    details { margin-top: 10px; }
+    summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+    a { color: var(--cyan); }
+    .row-input { display: flex; gap: 8px; margin-top: 10px; }
+    .row-input input { flex: 1; min-width: 0; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line); background: rgba(0,0,0,0.3); color: var(--fg); font: inherit; }
+    .row-input button { margin-top: 0; }
+    #link { word-break: break-all; font-size: 12px; color: var(--muted); margin-top: 10px; }
+    #link a { color: var(--muted); }
+    .optional { border-style: dashed; }
+    .optional .mark { font-size: 15px; }
+    #all-set { text-align: center; padding: 26px 20px; margin-bottom: 14px; border-radius: 20px; background: linear-gradient(135deg, rgba(0, 202, 255, 0.16), rgba(30, 107, 255, 0.12)); border: 1px solid rgba(0, 202, 255, 0.4); }
+    #all-set h2 { margin: 0 0 6px; font-size: 24px; }
+    #all-set p { margin: 4px 0; color: var(--muted); }
+    .say { display: inline-block; margin: 6px 4px 0; padding: 7px 14px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); color: var(--fg); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <svg viewBox="0 0 300 210" aria-hidden="true">
+        <rect x="73" y="44" width="50" height="76" rx="25" fill="#e9fbff"/>
+        <rect x="177" y="44" width="50" height="76" rx="25" fill="#e9fbff"/>
+        <g transform="translate(150 158)"><path d="M-78 -14 Q0 32 66 -8 L69 -2 Q0 50 -78 -14 Z" fill="#ff9900"/>
+          <path d="M52 -16 L74 -9 L69 13" fill="none" stroke="#ff9900" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></g>
+      </svg>
+      <div>
+        <h1>Set up Dock</h1>
+        <p class="lead" id="lead">Each step turns green by itself. Keep this page open while you go.</p>
+      </div>
+    </header>
+    <div class="progress"><div id="bar"></div></div>
+
+    <div id="all-set" hidden>
+      <h2>You're all set 🎉</h2>
+      <p>Dock lives <span class="where-dock">in the menu bar (the little face)</span>. You can close this window.</p>
+      <p>Hold <b class="talk-key">⌥ Space</b> anywhere, say something, and let go. Try:</p>
+      <span class="say">"Open my downloads"</span>
+      <span class="say">"How do I split the screen?"</span>
+      <span class="say">"Focus on homework for 25 minutes"</span>
+    </div>
+
+    <div class="step" id="s-agent" hidden><div class="mark">!</div><div>
+      <div class="title">Dock isn't running</div>
+      <div class="detail">Open <b>OneDock</b> (in the Dock folder), or run <code class="start-cmd">./scripts/start.sh</code>.</div>
+    </div></div>
+
+    <div class="step" id="s-ax"><div class="mark">1</div><div>
+      <div class="title">Let Dock see your apps' menus</div>
+      <div class="detail" id="d-ax">Checking…</div>
+      <button id="b-ax" hidden>Open Accessibility settings</button>
+    </div></div>
+
+    <div class="step" id="s-mic"><div class="mark">2</div><div>
+      <div class="title">Let Dock hear you</div>
+      <div class="detail" id="d-mic">Checking…</div>
+      <button id="b-mic" hidden>Allow the microphone</button>
+    </div></div>
+
+    <div class="step" id="s-ai"><div class="mark">3</div><div>
+      <div class="title">Connect the AI (Amazon Bedrock)</div>
+      <div class="detail" id="d-ai">Checking…</div>
+    </div></div>
+
+    <div class="step" id="s-try"><div class="mark">4</div><div>
+      <div class="title">Try it</div>
+      <div class="detail" id="d-try">Hold <b class="talk-key">⌥ Space</b>, say <i>"open my downloads"</i>, and let go. The answer pops up <span class="where-bubble">under the menu bar</span> and Dock says it.</div>
+    </div></div>
+
+    <div class="step optional" id="s-screen"><div class="mark">👁</div><div>
+      <div class="title">Let Dock look at the window when you ask <span style="color: var(--muted); font-weight: 400;">(optional)</span></div>
+      <div class="detail" id="d-screen">Checking…</div>
+      <button id="b-screen" hidden>Allow Screen Recording</button>
+    </div></div>
+
+    <div class="step optional" id="s-google"><div class="mark">G</div><div>
+      <div class="title">Sign in with Google <span style="color: var(--muted); font-weight: 400;">(optional)</span></div>
+      <div class="detail" id="d-google">Connects your <b>Google Calendar</b> and <b>Gmail</b> in one go: Dock knows what's next ("get ready for stat class"), adds reminders when you ask, and you can ask "what did I miss?" while email waits during focus. Dock only reads email (nothing is marked as read, sent or deleted unless you say yes to a clean-up). The sign-in stays on this computer.</div>
+      <button id="b-google" hidden>Sign in with Google</button>
+      <div id="mail-people-box" hidden>
+        <div class="detail">People who may reach you during focus (names or addresses, separated by commas). Other email waits until you ask.</div>
+        <div class="row-input"><input id="mail-people" placeholder="Mom, boss@company.com"><button id="b-mail-people">Save</button></div>
+      </div>
+      <button id="b-google-off" class="secondary-button" hidden>Sign out</button>
+      <div class="detail" id="google-result"></div>
+    </div></div>
+
+    <div class="step optional" id="phone"><div class="mark">📱</div><div>
+      <div class="title">Add your phone <span style="color: var(--muted); font-weight: 400;">(optional)</span></div>
+      <div class="detail" id="d-phone">A phone in a stand becomes Dock's face and screen, and can see when you step away during focus. Waiting for the phone address…</div>
+      <div class="pair" id="pair" hidden>
+        <div id="qr"></div>
+        <ol>
+          <li>Scan the code with the phone's camera.</li>
+          <li>Open the link in <b>Chrome</b>.</li>
+          <li>Chrome menu ⋮ › <b>Add to Home screen</b>, so Dock opens with one tap.</li>
+        </ol>
+      </div>
+      <div id="link"></div>
+    </div></div>
+
+    <h2 class="section">Settings</h2>
+    <div class="setting">
+      <div><div class="title">Morning briefing</div>
+        <div class="detail">The first time you're at your computer each morning, Dock offers today's calendar, the email that matters and your list. Say "brief me" any time.</div></div>
+      <label class="switch"><input type="checkbox" id="set-briefing"><span></span></label>
+    </div>
+    <div class="setting">
+      <div><div class="title">Start Dock when I log in</div>
+        <div class="detail">Dock waits <span class="where-dock">in the menu bar</span> from the moment the <span class="computer">Mac</span> starts.</div></div>
+      <label class="switch"><input type="checkbox" id="set-login"><span></span></label>
+    </div>
+    <div class="setting">
+      <div><div class="title">Suggest folders by itself</div>
+        <div class="detail">For every new download and Save window (uses a little AI each time). When off, Dock asks first in Save windows, and you can always ask "where should this go?".</div></div>
+      <label class="switch"><input type="checkbox" id="set-folders"><span></span></label>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const STEPS = ["s-ax", "s-mic", "s-ai", "s-try"];
+    STEPS.forEach((id, n) => { $(id).dataset.n = n + 1; });
+
+    function setStep(id, done, current) {
+      $(id).classList.toggle("done", done);
+      $(id).classList.toggle("current", current);
+      $(id).querySelector(".mark").textContent = done ? "✓" : $(id).dataset.n;
+    }
+
+    // The same page on Windows: other names for the same places and keys.
+    const WIN = navigator.userAgent.includes("Windows");
+    if (WIN) {
+      const fill = (selector, text) => document.querySelectorAll(selector).forEach((el) => { el.textContent = text; });
+      fill(".talk-key", "Alt+Space");
+      fill(".where-dock", "in the tray by the clock (the little face)");
+      fill(".where-bubble", "at the bottom right");
+      fill(".computer", "PC");
+      fill(".start-cmd", "scripts\\start.ps1");
+      $("s-ax").hidden = true;      // (Windows needs no permission to read menus)
+      $("s-screen").hidden = true;  // (or to take a screenshot)
+      STEPS.filter((id) => !$(id).hidden).forEach((id, n) => { $(id).dataset.n = n + 1; });
+    }
+
+    async function refresh() {
+      let s;
+      try { s = await (await fetch("/setup/status")).json(); } catch { return; }
+      $("s-agent").hidden = s.agent;
+      const ax = s.accessibility === true;
+      const mic = s.microphone === "allowed";
+      const steps = [ax, mic, s.bedrock, s.talked || s.phones > 0];
+      const current = steps.indexOf(false);
+      STEPS.forEach((id, n) => setStep(id, steps[n], n === current));
+      const shown = STEPS.map((id) => !$(id).hidden);
+      const done = steps.filter((ok, n) => ok && shown[n]).length, total = shown.filter(Boolean).length;
+      $("bar").style.width = `${(done / total) * 100}%`;
+      $("all-set").hidden = done < total;
+      $("lead").textContent = done < total ? `${done} of ${total} done. Each step turns green by itself.` : "Dock is ready.";
+      document.querySelector("h1").textContent = done < total ? "Set up Dock" : "Dock settings";
+
+      $("d-ax").innerHTML = ax ? "Allowed." : s.agent
+        ? "Click the button, then turn on <b>OneDock</b> in the list (you may need your password). Dock uses this to read menus, point at things and hear the talk key."
+        : "Waiting for Dock to start.";
+      $("b-ax").hidden = ax || !s.agent;
+
+      const denied = s.microphone === "denied";
+      $("d-mic").innerHTML = mic ? `Allowed. Dock only listens after you press the talk key or click its face, and turns speech into text on this ${WIN ? "PC" : "Mac"}.`
+        : denied ? (WIN ? "Turned off. Click the button and turn on <b>Let desktop apps access your microphone</b>."
+                    : "Turned off. Open System Settings › Privacy & Security › <b>Microphone</b> and turn on OneDock.")
+        : "Click the button and choose <b>Allow</b>. Dock only listens after you press the talk key or click its face.";
+      $("b-mic").hidden = mic || (denied && !WIN) || !s.agent;
+
+      $("d-ai").innerHTML = s.bedrock ? `Working (model <code>${s.model}</code>).` :
+        `Not working yet. In ${WIN ? "PowerShell" : "Terminal"}, run <code>aws login</code> with region <code>us-east-1</code>, and make sure your AWS account can use Amazon Bedrock.<br><small>${s.bedrock_error || ""}</small>`;
+      if (s.talked) $("d-try").innerHTML = "It works. 🎉";
+
+      if (s.phone_url) {
+        $("d-phone").textContent = s.phones > 0
+          ? (s.fixed_address ? "Phone connected. Its link never changes, so you only do this once." : "Phone connected.")
+          : "A phone in a stand becomes Dock's face and screen, and can see when you step away during focus.";
+        if ($("qr").dataset.url !== s.phone_url) { $("qr").innerHTML = s.qr_svg; $("qr").dataset.url = s.phone_url; }
+        $("pair").hidden = false;
+        $("link").textContent = s.phone_url;
+      } else {
+        $("pair").hidden = true;
+      }
+      $("phone").classList.toggle("done", s.phones > 0);
+
+      // Google: one sign-in for Calendar and Gmail (the user may have unticked one on Google's page).
+      const signedIn = !!s.google_address;
+      $("s-google").classList.toggle("done", signedIn && !!s.calendar && !!s.mail);
+      $("b-google").hidden = s.google_busy || !s.google_ready || (signedIn && !!s.calendar && !!s.mail);
+      $("b-google").textContent = signedIn ? "Sign in again" : "Sign in with Google";
+      $("mail-people-box").hidden = !s.mail;
+      $("b-google-off").hidden = !signedIn;
+      const missing = [!s.calendar && "Calendar", !s.mail && "Gmail"].filter(Boolean);
+      if (Number($("google-result").dataset.until || 0) < Date.now()) $("google-result").textContent = s.google_busy ? "Google's sign-in page is open in your browser. Choose your account and click Allow."
+        : signedIn ? `Signed in as ${s.google_address}.` + (missing.length ? ` ${missing.join(" and ")} wasn't allowed: sign in again and tick it.` : " Calendar and Gmail are connected.")
+        : !s.google_ready ? "Google sign-in isn't set up for this copy of Dock yet (see docs/GOOGLE-CALENDAR.md)."
+        : s.google_problem || "";
+      if (document.activeElement !== $("mail-people") && !$("mail-people").dataset.edited) $("mail-people").value = s.let_through || "";
+      if (document.activeElement !== $("set-briefing")) $("set-briefing").checked = !!s.briefing;
+      $("s-screen").classList.toggle("done", s.screen === true);
+      $("d-screen").innerHTML = s.screen === true
+        ? "Allowed. When a button isn't in the menus or labelled, Dock takes one picture of just that window to find it, only when you ask."
+        : "For buttons that aren't in the menus or labelled (icons drawn by the app). Click the button, then turn on <b>OneDock</b> under Screen Recording. Dock only takes a picture of the window you're in, only when you ask, and never keeps it.";
+      $("b-screen").hidden = s.screen === true || !s.agent;
+
+      if (document.activeElement !== $("set-login")) $("set-login").checked = !!s.start_at_login;
+      if (document.activeElement !== $("set-folders")) $("set-folders").checked = !!s.folder_suggestions;
+    }
+
+    $("b-ax").addEventListener("click", () => fetch("/setup/accessibility", { method: "POST" }));
+    $("b-mic").addEventListener("click", () => fetch("/setup/speech", { method: "POST" }));
+    $("b-screen").addEventListener("click", () => fetch("/setup/screen", { method: "POST" }));
+    $("b-google").addEventListener("click", async () => {
+      const r = await (await fetch("/setup/google", { method: "POST" })).json();
+      if (!r.ok) $("google-result").textContent = r.error;
+      refresh();
+    });
+    $("b-google-off").addEventListener("click", async () => {
+      await fetch("/setup/google-off", { method: "POST" });
+      refresh();
+    });
+    async function mailRequest(body) {
+      return (await fetch("/setup/mail", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+    }
+    $("mail-people").addEventListener("input", () => { $("mail-people").dataset.edited = "yes"; });
+    $("b-mail-people").addEventListener("click", async () => {
+      const r = await mailRequest({ let_through: $("mail-people").value });
+      delete $("mail-people").dataset.edited;
+      $("google-result").dataset.until = Date.now() + 5000;
+      $("google-result").textContent = r.let_through.length ? `Saved. ${r.let_through.join(", ")} can reach you during focus.` : "Saved. No one gets through during focus.";
+    });
+    $("set-briefing").addEventListener("change", (e) => mailRequest({ briefing: e.target.checked }));
+    $("set-login").addEventListener("change", (e) => fetch("/setup/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: e.target.checked }) }));
+    $("set-folders").addEventListener("change", (e) => fetch("/setup/folder-suggestions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ on: e.target.checked }) }));
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

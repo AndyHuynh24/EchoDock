@@ -1,0 +1,16 @@
+flowchart TD
+    A["📝 Your words<br/>'open my stat310 folder'"] --> B["🔌 tools/list from Dock's own MCP server"]
+    B --> C["✨ Bedrock (Claude Haiku 4.5)<br/>words + tool list + context:<br/>apps open, folders, time, calendar…"]
+    C -->|"wants a tool"| D["🧹 fix_call<br/>plain-code corrections:<br/>'folder' → open_folder, 'yes' → the last offer"]
+    D --> E["🔌 tools/call over MCP"]
+    E --> F{"Finished sentence?"}
+    F -->|"yes"| G["🔊 Reply: spoken, or a ✓ card and a sound<br/>for commands that just happened"]
+    F -->|"needs another step<br/>(e.g. find, then open)"| C
+    C -->|"just talking"| G
+
+    classDef step fill:#ede7f6,stroke:#7e57c2,color:#2a1b4d
+    classDef ai fill:#e0f7fa,stroke:#00acc1,color:#003b44
+    classDef out fill:#e8f5e9,stroke:#43a047,color:#123d17
+    class A,B,D,E,F step
+    class C ai
+    class G out

@@ -1,0 +1,13 @@
+sequenceDiagram
+    participant T as 🔌 A tool on the server
+    participant H as 🔀 Hub
+    participant A as 🛠️ Desktop agent
+    participant M as 🗂️ macOS / Windows
+
+    T->>H: run_on_computer("open_folder", name="downloads")
+    H->>A: {"id": 17, "action": "open_folder", "args": {...}}
+    A->>A: ACTIONS["open_folder"]: allowed? run it
+    A->>M: Spotlight / Windows Search, then open
+    A-->>H: {"id": 17, "ok": true, "result": {"folder": "Downloads"}}
+    H-->>T: the result (or an error after 5 s)
+    Note over A,H: The agent also sends events on its own:<br/>app in front changed · new download · Save window opened

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1823">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Dock</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-view="face" data-stage="face">
+  <header id="topbar">
+    <button type="button" id="focus-button" class="pill">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9.5 2.5h5"/></svg>
+      <span id="focus-button-text">Focus</span>
+    </button>
+    <div id="status" hidden>Connecting…</div>
+    <div id="views" role="tablist">
+      <button type="button" class="view-tab active" data-view="face">Dock</button>
+      <button type="button" class="view-tab" data-view="pad">Shortcuts</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- The stage shows one thing at a time: the face, the focus timer, or the cards. -->
+    <section id="stage">
+      <div id="face-scene" class="scene">
+        <div class="face-tips" id="face-tips-left"></div>
+        <div class="face-tips" id="face-tips-right"></div>
+        <svg id="face" class="mood-happy" viewBox="0 0 300 210" role="img" aria-label="Dock's face">
+          <g class="float">
+            <g transform="translate(98 82)"><g class="eye left"><g class="look"><g class="lid">
+              <rect class="eye-open" x="-25" y="-38" width="50" height="76" rx="25"/>
+              <path class="eye-happy" d="M-27 12 Q0 -30 27 12"/>
+            </g></g></g></g>
+            <g transform="translate(202 82)"><g class="eye right"><g class="look"><g class="lid">
+              <rect class="eye-open" x="-25" y="-38" width="50" height="76" rx="25"/>
+              <path class="eye-happy" d="M-27 12 Q0 -30 27 12"/>
+            </g></g></g></g>
+            <!-- The smile: a swoosh with an arrowhead, like the Amazon smile -->
+            <g class="mouth" transform="translate(150 158)"><g class="mouth-shape">
+              <path class="smile" d="M-78 -14 Q0 32 66 -8 L69 -2 Q0 50 -78 -14 Z"/>
+              <path class="arrow" d="M52 -16 L74 -9 L69 13"/>
+            </g></g>
+            <text class="zz" x="236" y="40">z</text><text class="zz zz2" x="256" y="22">z</text>
+          </g>
+        </svg>
+        <div id="face-line"></div>
+        <div id="face-detail"></div>
+      </div>
+
+      <div id="timer-scene" class="scene">
+        <div id="timer-ring">
+          <svg viewBox="0 0 200 200" aria-hidden="true">
+            <defs><linearGradient id="ring-color" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00caff"/><stop offset="1" stop-color="#1e6bff"/></linearGradient></defs>
+            <circle class="track" cx="100" cy="100" r="90"/>
+            <circle id="timer-progress" cx="100" cy="100" r="90"/>
+          </svg>
+          <div id="timer-inner">
+            <div id="focus-time">0:00</div>
+            <div id="focus-state"></div>
+          </div>
+        </div>
+        <div id="focus-goal"></div>
+        <div id="timer-moment"></div>
+        <div id="timer-presence"><span id="presence-dot"></span> <span id="presence-text">Camera off</span></div>
+      </div>
+
+      <div id="cards" class="scene">
+        <!-- Mac only: the chat box that opens when you click Dock's face in the menu bar -->
+        <div id="compose" class="panel" hidden>
+          <form id="compose-form">
+            <input id="compose-input" type="text" placeholder="Ask Dock…" autocomplete="off">
+            <button type="button" id="compose-mic" aria-label="Talk">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+            </button>
+          </form>
+          <div id="compose-tips"></div>
+          <div id="compose-foot">
+            <span id="compose-hint">Talk or type · ⌥ Space opens this anywhere · Esc closes</span>
+            <button type="button" id="compose-settings" aria-label="Dock settings" title="Settings and setup">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>
+            </button>
+          </div>
+        </div>
+        <div id="answer" class="panel transient" hidden>
+          <div id="answer-you"></div>
+          <div id="answer-text"></div>
+        </div>
+
+        <div id="card" class="panel transient" hidden>
+          <div id="card-title"></div>
+          <div id="card-shortcut"></div>
+          <div id="card-detail"></div>
+        </div>
+
+        <div id="tip" class="panel transient" hidden>
+          <div id="tip-title"></div>
+          <div id="tip-shortcut"></div>
+          <div id="tip-detail"></div>
+        </div>
+
+        <div id="reading" class="panel" hidden>
+          <div class="eyebrow">Reading aloud</div>
+          <div id="reading-title"></div>
+          <button type="button" id="reading-stop" class="primary">Stop reading</button>
+        </div>
+
+        <div id="mail" class="panel" hidden>
+          <button type="button" class="close" aria-label="Close">×</button>
+          <div class="panel-title" id="mail-title"></div>
+          <ul id="mail-list"></ul>
+          <div id="mail-rest"></div>
+        </div>
+
+        <div id="briefing" class="panel" hidden>
+          <button type="button" class="close" aria-label="Close">×</button>
+          <div class="panel-title" id="briefing-title"></div>
+          <div id="briefing-sections"></div>
+          <div class="row" id="briefing-ask">
+            <button type="button" id="briefing-yes" class="primary">Brief me</button>
+            <button type="button" id="briefing-no" class="secondary">Not now</button>
+          </div>
+        </div>
+
+        <div id="search" class="panel" hidden>
+          <button type="button" class="close" aria-label="Not now">×</button>
+          <div class="eyebrow" id="search-why">Search Google?</div>
+          <div id="search-query"></div>
+          <div class="row">
+            <button type="button" id="search-go" class="primary">Search</button>
+            <button type="button" id="search-no" class="secondary">Not now</button>
+          </div>
+        </div>
+
+        <div id="writing" class="panel" hidden>
+          <button type="button" class="close" aria-label="Keep my text">×</button>
+          <div class="eyebrow" id="writing-title">Suggested change</div>
+          <div id="writing-text"></div>
+          <div class="row">
+            <button type="button" id="writing-replace" class="primary">Replace</button>
+            <button type="button" id="writing-below" class="secondary">Insert below</button>
+            <button type="button" id="writing-more" class="secondary">Change more</button>
+          </div>
+        </div>
+
+        <div id="mail-plan" class="panel" hidden>
+          <button type="button" class="close" aria-label="Not now">×</button>
+          <div class="panel-title">Clean up your inbox</div>
+          <ul id="mail-plan-list"></ul>
+          <div class="row">
+            <button type="button" id="mail-plan-go" class="primary">Clean up</button>
+            <button type="button" id="mail-plan-no" class="secondary">Not now</button>
+          </div>
+        </div>
+
+        <div id="downloads" class="panel" hidden>
+          <button type="button" class="close" aria-label="Not now for all">×</button>
+          <div class="eyebrow">New download</div>
+          <ul id="downloads-list"></ul>
+        </div>
+
+        <div id="plan" class="panel" hidden>
+          <button type="button" class="close" aria-label="Close">×</button>
+          <div class="panel-title">Tidy Downloads</div>
+          <ul id="plan-moves"></ul>
+          <ul id="plan-questions"></ul>
+          <div class="row">
+            <button type="button" id="plan-move" class="primary">Move selected</button>
+            <button type="button" id="plan-cancel" class="secondary">Not now</button>
+          </div>
+        </div>
+
+        <div id="recap" class="panel" hidden>
+          <button type="button" class="close" aria-label="Close">×</button>
+          <div class="panel-title" id="recap-day"></div>
+          <div id="recap-summary"></div>
+          <div id="recap-apps"></div>
+          <ul id="recap-files"></ul>
+        </div>
+
+        <!-- After a focus session: proof of work -->
+        <div id="focus-report" class="panel" hidden>
+          <button type="button" class="close" aria-label="Close">×</button>
+          <div class="eyebrow">Session done</div>
+          <div class="panel-title" id="report-title"></div>
+          <div id="report-numbers"></div>
+          <div id="report-apps"></div>
+          <ul id="report-files"></ul>
+          <div id="report-ask">Did you finish your goal?
+            <div class="row"><button type="button" id="report-yes" class="primary">Yes!</button><button type="button" id="report-no" class="secondary">Not yet</button></div>
+          </div>
+          <div class="row">
+            <button type="button" id="report-break" class="primary">Take a break</button>
+            <button type="button" id="report-again" class="secondary">Another round</button>
+          </div>
+        </div>
+
+        <!-- Break: flashcards of the shortcuts you asked about -->
+        <div id="focus-break" class="panel" hidden>
+          <div class="eyebrow">Break · <span id="break-left"></span></div>
+          <div id="flashcard">
+            <div id="flash-app"></div>
+            <div id="flash-name"></div>
+            <div id="flash-answer" hidden></div>
+            <div class="row center" id="flash-buttons">
+              <button type="button" id="flash-reveal" class="secondary">Show shortcut</button>
+              <button type="button" id="flash-next" class="secondary" hidden>Next</button>
+            </div>
+          </div>
+          <div id="flash-empty" hidden>Ask Dock where things are in your apps, and their shortcuts become flashcards here.</div>
+        </div>
+
+        <div id="week" class="panel" hidden>
+          <button type="button" class="close" aria-label="Close">×</button>
+          <div class="panel-title">This week</div>
+          <div id="week-summary"></div>
+          <div id="week-days"></div>
+          <ul id="week-goals"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- "Try saying" examples for the app in front (Shortcuts view, and while typing) -->
+    <section id="try">
+      <div id="try-chips">
+        <button type="button" class="chip">Tidy my downloads</button>
+        <button type="button" class="chip">What's on today?</button>
+      </div>
+    </section>
+
+    <section id="pad-area">
+      <div id="pad-app">Open an app on your Mac</div>
+      <div id="pad"></div>
+    </section>
+  </main>
+
+  <footer id="controls">
+    <div id="buttons">
+      <button type="button" id="type-button" class="round" aria-label="Type a message">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M7.5 14h9"/></svg>
+      </button>
+      <button type="button" id="talk" aria-label="Tap to talk">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+      </button>
+      <button type="button" id="settings-button" class="round" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg>
+      </button>
+    </div>
+    <form id="chat" hidden>
+      <input id="chat-input" type="text" placeholder="Type, or just talk…" autocomplete="off" enterkeyhint="send">
+      <button type="button" id="chat-mic" class="round small" aria-label="Talk instead">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+      </button>
+      <button type="submit" class="primary">Send</button>
+      <button type="button" id="chat-close" class="round small" aria-label="Close keyboard">×</button>
+    </form>
+  </footer>
+  <div id="glow" aria-hidden="true"></div>
+
+  <!-- Focus: start a session, or change the one that is running -->
+  <dialog id="focus-sheet" class="sheet">
+    <div class="sheet-head"><span>Focus</span><button type="button" class="close" aria-label="Close">×</button></div>
+    <div id="focus-start">
+      <input id="focus-goal-input" type="text" placeholder="Goal, e.g. stat310 homework" autocomplete="off">
+      <div id="focus-lengths">
+        <button type="button" class="chip" data-minutes="15">15 min</button>
+        <button type="button" class="chip" data-minutes="25">25 min</button>
+        <button type="button" class="chip selected" data-minutes="50">50 min</button>
+        <button type="button" class="chip" data-minutes="90">90 min</button>
+        <button type="button" class="chip" data-minutes="0">Until I stop</button>
+        <input id="focus-custom" type="number" min="1" max="600" placeholder="other min">
+      </div>
+      <div class="row">
+        <button type="button" id="focus-go" class="primary">Start</button>
+        <button type="button" id="focus-week" class="secondary">This week</button>
+      </div>
+      <div id="focus-tip">Tip: turn on Do Not Disturb, keep the phone charging, and pin this screen (Settings › Security › App pinning).</div>
+    </div>
+    <div id="focus-live" hidden>
+      <div id="sheet-goal"></div>
+      <div id="focus-stats"></div>
+      <div class="row">
+        <button type="button" id="focus-pause" class="secondary">Pause</button>
+        <button type="button" id="focus-end" class="secondary">End session</button>
+      </div>
+    </div>
+    <label class="check"><input id="focus-camera" type="checkbox" checked> Use the camera to notice when I step away (video stays on this phone)</label>
+  </dialog>
+
+  <dialog id="settings-sheet" class="sheet">
+    <div class="sheet-head"><span>Settings</span><button type="button" class="close" aria-label="Close">×</button></div>
+    <label class="check" id="folder-suggestions-row"><input id="folder-suggestions" type="checkbox"> Suggest folders by itself for new downloads and Save windows (uses a little AI each time). When off, Dock asks first in Save windows.</label>
+    <button type="button" id="install" class="primary" hidden>Install Dock on this phone</button>
+    <div id="install-help">To open Dock with one tap: Chrome menu ⋮ › <b>Add to Home screen</b>.</div>
+    <div id="settings-status"></div>
+    <div id="saved" hidden>Dock saved you <b id="saved-week"></b> this week</div>
+  </dialog>
+
+  <video id="camera" playsinline muted hidden></video>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="focus.js"></script>
+</body>
+</html>

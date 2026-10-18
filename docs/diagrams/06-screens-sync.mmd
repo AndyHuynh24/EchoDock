@@ -1,0 +1,8 @@
+flowchart LR
+    tool["🔌 Any tool"] -- "hub.push_phone('card', …)" --> hub["🔀 Hub"]
+    hub --> p["📱 Phone"]
+    hub --> b["💬 Bubble"]
+    ask["You ask on one screen"] -- "'asking' / 'answered'" --> hub
+    p -. "speech_done" .-> hub
+    classDef n fill:#ede7f6,stroke:#7e57c2,color:#2a1b4d
+    class tool,hub,p,b,ask n

@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.dock-token
+.data/
+OneDock.app/
+server/google_oauth_client.json
+*.log
+
+# Not part of the project
+CLAUDE.md
+.claude/
+PipetteCoach/
