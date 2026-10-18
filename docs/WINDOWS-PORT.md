@@ -5,6 +5,7 @@ Every Dock feature has a Windows version. The server and the phone/bubble page a
 **Status (Oct 17, final check before the first Windows run):** written on the Mac and checked there as far as a Mac can: every file passes pyflakes (no unknown names or missing imports), the Windows agent has the same 47 actions with the same arguments as the Mac's, the lockfile has Windows builds of every package (Python is pinned to 3.12 in `.python-version`, as on the Mac), and every Windows library call was checked against that library's own code. Today's Mac fixes (tap-to-talk, "close everything except…", Photoshop never opening a "photos" folder, reading your selection, tidy reading file contents, File Explorer in workspaces) are in the Windows version too. It hasn't run on Windows yet, so expect a few fixes on the first real run. Use [test-checklist-windows.md](test-checklist-windows.md).
 
 ## Install and start (Windows 10 or 11)
+Short version: [WINDOWS-SETUP.md](WINDOWS-SETUP.md).
 1. Install Git, then clone the repo.
 2. In PowerShell, from the repo folder: `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`. It installs `uv` and `cloudflared` (with winget), Dock's Python packages, makes your token, checks the AWS login, and adds **OneDock** to the Start menu and the desktop (and, if you say yes, to start at login).
 3. AWS: `winget install Amazon.AWSCLI`, then `aws login` (region `us-east-1`).
