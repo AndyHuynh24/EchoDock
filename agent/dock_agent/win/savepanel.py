@@ -1,16 +1,7 @@
-"""Save windows on Windows: suggest the folder while you're choosing where to
-save (the same answers as dock_agent/savepanel.py on the Mac).
+"""Detects Windows Save As dialogs and switches them to the suggested folder.
 
-When any app shows the standard Windows "Save As" window (Chrome with "Ask
-where to save each file", File > Save As in Notepad, Word, …), the server
-gets the file name, and Dock suggests a folder on the phone and in the
-bubble. "Save here" switches the Save window to that folder the way you could
-by hand: type the folder into "File name" and press Enter (Windows then opens
-that folder), put the file name back, and click Save.
-
-Checked once a second, only in the window in front. The standard Save window
-is a dialog (class "#32770") with a "File name" box (id 1001) and a Save
-button (id 1); its address bar is a toolbar named "Address: …".
+The standard dialog is class "#32770" with a File name box (id 1001) and a Save
+button (id 1). Typing a folder into File name and pressing Enter navigates there.
 """
 
 import threading
@@ -27,7 +18,7 @@ from dock_agent.win import overlay, uia, winapi
 CHECK_SECONDS = 1
 SAVE_WORDS = ("save", "export", "download")
 
-_open = None  # the Save window being shown: {"hwnd", "pid", "file", "app", "where"}
+_open = None  # {"hwnd", "pid", "file", "app", "where"}
 _switching = False
 
 
@@ -36,7 +27,7 @@ class SavePanelError(Exception):
 
 
 def _parts(hwnd: int) -> dict | None:
-    """The Save window's name box, Save button and address bar, if `hwnd` is one."""
+    """File name box, Save button and address bar, if `hwnd` is a Save dialog."""
     try:
         if win32gui.GetClassName(hwnd) != "#32770":
             return None
@@ -56,7 +47,7 @@ def _parts(hwnd: int) -> dict | None:
     if name_box is None or save_button is None:
         return None
     if not any(word in save_button.name.lower() for word in SAVE_WORDS):
-        return None  # an Open window, not a Save window
+        return None  # an Open dialog
     return {"name": name_box, "save": save_button, "address": address}
 
 
@@ -70,7 +61,7 @@ def _value(found) -> str:
 
 
 def _where(parts: dict) -> str:
-    """The folder the Save window is in (from its address bar, "Address: Documents\\school")."""
+    """Current folder, from the address bar."""
     address = parts.get("address")
     return address.name.split(":", 1)[1].strip() if address is not None else ""
 
@@ -80,9 +71,7 @@ def start() -> None:
 
 
 def _watch() -> None:
-    """Announce each Save window once it shows a real file name (again if you
-    type a new one, once you stop typing), and notice when you pick a folder
-    yourself, switch away, or close it."""
+    """Report each Save dialog once its file name settles, and report folder or app changes."""
     global _open
     uia.ready()
     last_name = ""
@@ -120,7 +109,7 @@ def _watch() -> None:
 
 
 def point(label: str) -> dict:
-    """Point at the Save window's address bar with Dock's suggestion."""
+    """Point at the dialog's address bar."""
     parts = _parts(_open["hwnd"]) if _open is not None else None
     rect = (parts["address"] or parts["name"]).rect if parts is not None else None
     if rect:
@@ -129,7 +118,7 @@ def point(label: str) -> dict:
 
 
 def save_in(folder: str, new_folder: bool = False, press_save: bool = True) -> dict:
-    """Switch the open Save window to `folder` (relative to home), then click Save."""
+    """Switch the open Save dialog to `folder` (relative to home) and click Save."""
     global _switching
     _switching = True
     try:
@@ -137,7 +126,7 @@ def save_in(folder: str, new_folder: bool = False, press_save: bool = True) -> d
     finally:
         parts = _parts(_open["hwnd"]) if _open is not None and win32gui.IsWindow(_open["hwnd"]) else None
         if parts is not None:
-            _open["where"] = _where(parts)  # so Dock's own switch isn't reported as yours
+            _open["where"] = _where(parts)  # don't report our own change
         _switching = False
 
 
@@ -158,7 +147,7 @@ def _save_in(folder: str, new_folder: bool, press_save: bool) -> dict:
     parts = _parts(hwnd)
     if parts is None:
         raise SavePanelError("There's no Save window open right now.")
-    target = tidy._destination(folder, new_folder)  # checks it's one of your folders; may create it
+    target = tidy._destination(folder, new_folder)
     overlay.hide()
     if not winapi.bring_forward(hwnd):
         raise SavePanelError("I couldn't bring the Save window to the front.")
@@ -173,7 +162,6 @@ def _save_in(folder: str, new_folder: bool, press_save: bool) -> dict:
         value.SetValue(text, waitTime=0)
         return True
 
-    # Typing a folder into "File name" and pressing Enter opens that folder.
     if not set_name(str(target)):
         raise SavePanelError("I couldn't type the folder into the Save window.")
     time.sleep(0.2)

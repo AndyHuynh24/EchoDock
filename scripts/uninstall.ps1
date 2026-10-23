@@ -1,6 +1,4 @@
-# Removes OneDock's shortcuts on Windows (Start menu, desktop, start at login).
-# Your workspaces, notes and activity (in ~\.dock and server\.data) are kept;
-# delete those folders to remove them too.
+# Removes OneDock's shortcuts on Windows. Data in ~\.dock and server\.data is kept.
 #   powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1
 
 foreach ($folder in "Programs", "Desktop", "Startup") {

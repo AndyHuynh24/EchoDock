@@ -1,14 +1,5 @@
-"""The on-screen pointer on Windows: a see-through, click-through window
-on top of everything that draws a highlight box, an arrow and a label next to
-a spot on the screen (the same look as dock_agent/overlay.py on the Mac).
-
-It goes away as soon as you do something (click, type, or move the mouse a
-little), or after SHOW_SECONDS. The window has its own thread and message
-loop; show() and hide() hand their work to it, so they're safe from any thread.
-
-The picture is drawn with Pillow on a magenta background, and Windows makes
-that colour see-through (a "colour key"), which is the simplest see-through
-window Windows has.
+"""On-screen pointer on Windows: a topmost, click-through, color-keyed window drawn
+with Pillow. Hidden on user input or after SHOW_SECONDS. Thread-safe.
 """
 
 import ctypes
@@ -25,10 +16,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageWin
 from dock_agent.win import winapi
 
 SHOW_SECONDS = 6
-IGNORE_FIRST_SECONDS = 0.5  # right after it appears, don't count small jitters
-MOVE_PIXELS = 25            # moving the mouse further than this (at 100 % scale) hides it
-MARGIN = 360                # room around the target for the arrow and a short label
-KEY = (255, 0, 255)         # this colour is see-through
+IGNORE_FIRST_SECONDS = 0.5
+MOVE_PIXELS = 25
+MARGIN = 360
+KEY = (255, 0, 255)  # transparent color key
 ORANGE, WHITE = (255, 149, 0), (255, 255, 255)
 WM_WORK = win32con.WM_APP + 1
 TIMER_WATCH, TIMER_END = 1, 2
@@ -50,7 +41,7 @@ def start() -> None:
 
 
 def show(rect: tuple[float, float, float, float], label: str, on_hide=None) -> None:
-    """Point at `rect` (x, y, width, height in screen pixels from the top-left)."""
+    """Point at `rect` (x, y, width, height in screen pixels)."""
     _jobs.put(("show", rect, label, on_hide))
     if _hwnd:
         win32gui.PostMessage(_hwnd, WM_WORK, 0, 0)
@@ -73,19 +64,19 @@ def _font(size: int):
 
 def _thick_line(draw, start, end, color, width) -> None:
     draw.line([start, end], fill=color, width=width)
-    for x, y in (start, end):  # round ends
+    for x, y in (start, end):
         draw.ellipse([x - width / 2, y - width / 2, x + width / 2, y + width / 2], fill=color)
 
 
 def _draw(rect, label) -> tuple[Image.Image, tuple[int, int]]:
-    """The picture and where its top-left goes on the screen."""
+    """The image and its top-left position on screen."""
     scale = winapi.scale()
     x, y, w, h = rect
     font = _font(round(20 * scale))
     label_width = font.getbbox(label)[2] if label else 0
     room = max(round(MARGIN * scale), round(200 * scale + label_width + 60 * scale))
     screen = winapi.screen_of((x + w / 2, y + h / 2))["full"]
-    flipped = x + w + room > screen[0] + screen[2]  # not enough room on the right: arrow and label on the left
+    flipped = x + w + room > screen[0] + screen[2]
     left = x - room if flipped else x - round(40 * scale)
     top = y - round(40 * scale)
     width, height = w + room + round(40 * scale), h + round(260 * scale)
@@ -97,7 +88,7 @@ def _draw(rect, label) -> tuple[Image.Image, tuple[int, int]]:
     draw.rounded_rectangle([tx - pad, ty - pad, tx + w + pad, ty + h + pad], radius=round(6 * scale),
                            outline=ORANGE, width=round(4 * scale))
     side = -1 if flipped else 1
-    if y - screen[1] < 40 * scale:  # a menu bar title: the arrow comes from below
+    if y - screen[1] < 40 * scale:
         head = (tx + w / 2, ty + h + 8 * scale)
         tail = (head[0] + side * 90 * scale, head[1] + 130 * scale)
     else:
@@ -141,13 +132,13 @@ def _do_hide() -> None:
 
 
 def _watch_user() -> None:
-    """Hide as soon as the user clicks, types or moves the mouse."""
+    """Hide on click, key press or mouse move."""
     if _image is None or time.time() - _shown["at"] < IGNORE_FIRST_SECONDS:
         return
     x, y = win32api.GetCursorPos()
     moved = math.hypot(x - _shown["cursor"][0], y - _shown["cursor"][1]) > MOVE_PIXELS * winapi.scale()
     if moved or winapi.any_key_down():
-        _do_hide()  # (a menu Dock opened stays open; the end timer still closes it)
+        _do_hide()
 
 
 def _wndproc(hwnd, message, wparam, lparam):

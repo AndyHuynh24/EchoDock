@@ -1,4 +1,4 @@
-"""Open apps by a spoken name, e.g. "VS Code" -> Visual Studio Code."""
+"""Open apps by spoken name ("VS Code" -> Visual Studio Code)."""
 
 import difflib
 import re
@@ -13,7 +13,7 @@ APP_FOLDERS = [
     Path.home() / "Applications",
 ]
 
-# Short names people say -> the real app name.
+# Common short names.
 ALIASES = {
     "vscode": "Visual Studio Code",
     "code": "Visual Studio Code",
@@ -54,19 +54,18 @@ def find_app(name: str) -> tuple[str, Path] | None:
 
     if target in ALIASES:
         alias = ALIASES[target]
-        # A known short name for an app that isn't installed: don't guess another app.
+        # Known alias but not installed: don't guess.
         return (alias, apps[alias]) if alias in apps else None
     if target in by_norm:
         best = by_norm[target]
     else:
-        # "cap cut" -> CapCut, "studio" -> Visual Studio Code (a word starts with it),
-        # but "word" must not match "Passwords".
+        # Prefix matches per word, but "word" must not match "Passwords".
         starts = [app for key, app in by_norm.items() if key.startswith(target)]
         word_starts = [
             app for app in apps
             if any(_norm(word).startswith(target) for word in app.split())
         ]
-        close = difflib.get_close_matches(target, by_norm, n=1, cutoff=0.82)  # (0.75 let "photoshop" match Photos; "safary" still finds Safari)
+        close = difflib.get_close_matches(target, by_norm, n=1, cutoff=0.82)
         if starts:
             best = min(starts, key=len)
         elif word_starts:
@@ -79,8 +78,7 @@ def find_app(name: str) -> tuple[str, Path] | None:
 
 
 def open_app(name: str, exact: bool = False) -> dict:
-    """Open an app by a spoken name. exact=True only accepts an app with exactly
-    that name (used when Dock is only guessing that a name might be an app)."""
+    """Open an app by spoken name. exact=True accepts only an exact name."""
     found = find_app(name)
     if exact and found and _norm(found[0]) != _norm(name):
         found = None
@@ -90,7 +88,7 @@ def open_app(name: str, exact: bool = False) -> dict:
         app, path = found
         subprocess.run(["open", "-a", str(path)], check=True)
         return {"app": app}
-    # Last try: let macOS look it up (this also finds apps like Finder).
+    # Fall back to macOS's own lookup.
     if subprocess.run(["open", "-a", name], capture_output=True).returncode == 0:
         return {"app": name}
     raise AppNotFound(f"I couldn't find an app called {name}.")

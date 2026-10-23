@@ -1,6 +1,5 @@
 #!/bin/bash
-# Stops Dock from starting at login. Your workspaces, notes and activity
-# (in ~/.dock and server/.data) are kept; delete those folders to remove them too.
+# Stops Dock from starting at login. Data in ~/.dock and server/.data is kept.
 
 LABEL="com.onedock.dock"
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && echo "Stopped Dock." || echo "Dock wasn't running at login."

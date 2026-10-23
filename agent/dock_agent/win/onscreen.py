@@ -1,14 +1,5 @@
-"""Help with things that aren't in an app's menus, on Windows: toolbar
-buttons, ribbon buttons, icons and other controls in the window (the same
-answers as dock_agent/onscreen.py on the Mac).
-
-1. The window's own controls (free, exact): UI Automation lists buttons with
-   their names (Chrome's "Downloads", Word's ribbon buttons, VS Code's
-   "Toggle Panel (Ctrl+J)"). Dock points at the real button, and "do it"
-   presses it.
-2. A screenshot of only the window in front, taken when the user asks and
-   nothing else found it. The server asks the AI where the control is; Dock
-   circles that spot, and "do it" clicks there. (Windows asks no permission for this.)
+"""Help for controls outside the menus on Windows: named controls via UI Automation,
+then a window screenshot for the server's vision model.
 """
 
 import base64
@@ -32,10 +23,10 @@ ROLE_NAMES = {ControlType.ButtonControl: "button", ControlType.CheckBoxControl: 
               ControlType.TabItemControl: "tab", ControlType.MenuItemControl: "menu button",
               ControlType.EditControl: "text field"}
 MAX_CONTROLS = 400
-MIN_SHOWING = 0.6       # this much of a control must be inside the window
-SHOT_WIDTH = 1280       # the screenshot is shrunk to this width for the AI
+MIN_SHOWING = 0.6  # visible fraction required
+SHOT_WIDTH = 1280  # screenshot width sent to the model
 
-_controls: list = []    # the elements from the last look, by number
+_controls: list = []
 
 
 class NotAllowed(Exception):
@@ -43,7 +34,7 @@ class NotAllowed(Exception):
 
 
 def screen_permission(ask: bool = False) -> bool:
-    return True  # (Windows lets apps take screenshots without asking)
+    return True
 
 
 def _showing(rect, clip) -> bool:
@@ -55,7 +46,7 @@ def _showing(rect, clip) -> bool:
 
 
 def window_controls() -> dict:
-    """The named buttons and other controls in the front app's window that are showing."""
+    """Visible named controls in the front window."""
     global _controls
     app_name, pid = menus.front_app()
     hwnd = winapi.window_of(pid)
@@ -72,7 +63,7 @@ def window_controls() -> dict:
                 continue
             name = part.name[:80]
             if part.accelerator and part.accelerator not in name:
-                name = f"{name} ({part.accelerator})"  # (the server reads shortcuts in names, like VS Code's)
+                name = f"{name} ({part.accelerator})"
             found.append((part.element, {"name": name, "role": ROLE_NAMES.get(part.type, "button"), "where": "window",
                                          "enabled": part.enabled, "rect": part.rect}))
     _controls = [element for element, _ in found]
@@ -113,8 +104,7 @@ def _png(image) -> str:
 
 
 def window_screenshot() -> dict:
-    """A screenshot of only the front app's window, shrunk for the AI, and
-    where that window is on screen (pixels, from the top-left)."""
+    """Screenshot of the front window (shrunk) and its frame on screen."""
     app_name, pid = menus.front_app()
     hwnd = winapi.window_of(pid)
     bounds = winapi.rect(hwnd) if hwnd else None
@@ -129,7 +119,7 @@ def window_screenshot() -> dict:
 
 
 def screen_region(rect: list[float]) -> dict:
-    """A sharp close-up of part of the screen, kept on the screen the spot is on."""
+    """High-resolution capture of a screen region."""
     sx, sy, sw, sh = winapi.screen_of((rect[0] + rect[2] / 2, rect[1] + rect[3] / 2))["full"]
     width, height = min(rect[2], sw), min(rect[3], sh)
     x = min(max(rect[0], sx), sx + sw - width)
@@ -140,7 +130,7 @@ def screen_region(rect: list[float]) -> dict:
 
 
 def click(x: float, y: float) -> None:
-    """One left click at (x, y), in screen pixels from the top-left."""
+    """Left click at (x, y) in screen pixels."""
     win32api.SetCursorPos((int(x), int(y)))
     time.sleep(0.05)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)

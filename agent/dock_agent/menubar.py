@@ -1,10 +1,4 @@
-"""Dock's icon in the Mac menu bar: a small face (cyan while listening) and
-the focus countdown next to it. Click it for the chat box ("Ask Dock…", with a
-microphone button); right-click (or Control-click) for the menu: open Dock,
-add your phone, start at login, quit.
-
-Windows: a tray icon (Shell_NotifyIcon, e.g. via pystray) (docs/WINDOWS-PORT.md).
-"""
+"""Menu bar icon: Dock's face plus the focus countdown. Click for the chat box, right-click for the menu."""
 
 import os
 import signal
@@ -43,7 +37,7 @@ _login = None
 
 
 def _face(listening: bool) -> NSImage:
-    """Two eyes and a smile, drawn as a menu bar icon."""
+    """Eyes and smile as a template image."""
     def draw(rect):
         (NSColor.colorWithSRGBRed_green_blue_alpha_(0, 0.79, 1, 1) if listening else NSColor.blackColor()).set()
         for x in (5, 12):
@@ -57,22 +51,22 @@ def _face(listening: bool) -> NSImage:
         return True
 
     image = NSImage.imageWithSize_flipped_drawingHandler_(NSMakeSize(21, 16), False, draw)
-    image.setTemplate_(not listening)  # black/white with the menu bar, cyan while listening
+    image.setTemplate_(not listening)
     return image
 
 
 class Actions(NSObject):
     def clicked_(self, sender):
         event = NSApp.currentEvent()
-        if event.type() == 4 or event.modifierFlags() & NSEventModifierFlagControl:  # right-click / Control-click
-            _item.setMenu_(_menu)  # (shown only for this click, so a normal click opens the chat box)
+        if event.type() == 4 or event.modifierFlags() & NSEventModifierFlagControl:
+            _item.setMenu_(_menu)
             _item.button().performClick_(None)
             _item.setMenu_(None)
         else:
-            from dock_agent import talk  # (talk uses this module too)
-            if talk.listening():  # clicked again: cancel
+            from dock_agent import talk
+            if talk.listening():
                 talk.cancel()
-            else:  # (be quiet if Dock is talking; otherwise open the chat box and listen)
+            else:
                 talk.tap()
 
     def openDock_(self, sender):
@@ -86,14 +80,13 @@ class Actions(NSObject):
         sender.setState_(1 if LOGIN_ITEM.exists() else 0)
 
     def quit_(self, sender):
-        os.killpg(os.getpgrp(), signal.SIGTERM)  # the server, this agent and the tunnel
+        os.killpg(os.getpgrp(), signal.SIGTERM)
 
 
 _actions = Actions.alloc().init()
 
 
 def start() -> None:
-    """Main thread."""
     global _item, _menu, _status, _login
     _item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)
     button = _item.button()
@@ -117,7 +110,7 @@ def start() -> None:
 
 
 def where() -> tuple[float, float]:
-    """The face's middle, in screen points from the top-left (for tests)."""
+    """The icon's center in screen points (for tests)."""
     frame = _item.button().window().frame()
     screen_height = NSScreen.screens()[0].frame().size.height
     return frame.origin.x + frame.size.width / 2, screen_height - frame.origin.y - frame.size.height / 2
@@ -128,7 +121,7 @@ def set_listening(on: bool) -> None:
 
 
 def set_focus(text: str) -> None:
-    """The focus countdown next to the face ("" when no session)."""
+    """Focus countdown text ("" when idle)."""
     _item.button().setTitle_(f" {text}" if text else "")
 
 
@@ -137,14 +130,14 @@ def set_status(text: str) -> None:
 
 
 def apply_start_at_login(on: bool) -> None:
-    """From the settings page: switch it, and update the menu's tick. Main thread."""
+    """Toggle start at login. Main thread."""
     set_start_at_login(on)
     if _login is not None:
         _login.setState_(1 if LOGIN_ITEM.exists() else 0)
 
 
 def set_start_at_login(on: bool) -> None:
-    """Start OneDock.app at login (a LaunchAgent that opens the app)."""
+    """Start OneDock.app at login (LaunchAgent)."""
     if not on:
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.onedock.dock"], capture_output=True)
         LOGIN_ITEM.unlink(missing_ok=True)

@@ -1,4 +1,4 @@
-"""Read it to me / summarize: the selected text, the open document, or a file."""
+"""Read aloud and summarize: the selection, the open document, or a file."""
 
 import asyncio
 from typing import Literal
@@ -15,7 +15,6 @@ SUMMARY_SYSTEM = (
     "assignment, say what is being asked and any due date. No markdown, lists or emojis."
 )
 
-# The phone reads this much at most; longer texts get a note.
 MAX_READ_CHARS = 4000
 
 
@@ -29,7 +28,7 @@ def register(mcp: MCPServer, hub: Hub) -> None:
         - "aloud": read it out loud ("read this to me", "read it to me")."""
         found = await run_on_computer(hub, "read_text", timeout=20, path=path)
         if how == "summarize":
-            summary = await asyncio.to_thread(bedrock.ask, found["text"], SUMMARY_SYSTEM, 400)
+            summary = await asyncio.to_thread(bedrock.ask, found["text"], SUMMARY_SYSTEM, 400, purpose="summary")
             await hub.push_phone("card", title=f"Summary of {found['title']}", detail=summary)
             return summary
         text = found["text"][:MAX_READ_CHARS]

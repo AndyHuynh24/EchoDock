@@ -1,22 +1,8 @@
-"""Dock's phone app at a fixed address, so it can be installed once and the
-link never changes.
+"""Hosts the phone app on S3 at a fixed address.
 
-The free Cloudflare tunnel gets a new address each time Dock starts (and
-sometimes after the Mac sleeps). So Dock also puts the phone app's files in a
-small Amazon S3 bucket in your AWS account:
-
-    https://<bucket>.s3.<region>.amazonaws.com/index.html   (never changes)
-
-Next to them, address.json holds the tunnel's current address. The installed
-app reads it each time it connects, so it finds the Mac by itself.
-
-What is public: only the phone app's own files (the same as in the repo) and
-the tunnel's address. The pairing token is never uploaded: the QR code passes
-it after "#", which browsers keep on the phone, and the app then remembers it.
-
-The bucket is created on the first run and its name kept in
-.data/webapp.json. Set DOCK_WEBAPP=off to skip all of this; the phone then
-uses the tunnel address directly, as before.
+The tunnel address changes between runs, so address.json next to the app holds
+the current one. Only the static files and that address are public; the pairing
+token stays on the phone. Set DOCK_WEBAPP=off to disable.
 """
 
 import json
@@ -33,11 +19,11 @@ from dock_server import tunnel
 from dock_server.state import DATA_DIR
 
 SETTINGS_FILE = DATA_DIR / "webapp.json"
-NOT_UPLOADED = {"setup.html"}  # the Mac's setup page stays on the Mac
+NOT_UPLOADED = {"setup.html"}
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("text/javascript", ".js")
 
-_base = ""      # https://<bucket>.s3.<region>.amazonaws.com once the files are up
+_base = ""
 _problem = ""
 
 
@@ -46,7 +32,7 @@ def app_url() -> str:
 
 
 def origin() -> str:
-    """The app's web address, which may call this server (see main.py)."""
+    """The app's address, allowed to call this server."""
     return _base
 
 
@@ -56,13 +42,13 @@ def problem() -> str:
 
 def start(static_dir: Path) -> None:
     if os.environ.get("DOCK_WEBAPP", "").lower() in ("off", "0", "no") or os.environ.get("DOCK_PUBLIC_URL"):
-        return  # a fixed address of its own needs none of this
+        return
     threading.Thread(target=_run, args=(static_dir,), daemon=True).start()
 
 
 def _run(static_dir: Path) -> None:
     global _base, _problem
-    while True:  # (e.g. the AWS login expired: try again until it's back)
+    while True:  # retry until AWS credentials are back
         try:
             s3 = boto3.client("s3")
             bucket, region = _bucket(s3)
@@ -78,8 +64,8 @@ def _run(static_dir: Path) -> None:
             time.sleep(30)
     published = None
     uploaded = _changed_at(static_dir)
-    while True:  # keep address.json pointing at the tunnel's current address
-        if _changed_at(static_dir) != uploaded:  # the app's files were edited: upload them again
+    while True:
+        if _changed_at(static_dir) != uploaded:
             uploaded = _changed_at(static_dir)
             try:
                 _upload_app(s3, bucket, static_dir)
@@ -99,7 +85,7 @@ def _run(static_dir: Path) -> None:
 
 
 def _bucket(s3) -> tuple[str, str]:
-    """The bucket for the app, made on the first run: public to read, nothing else."""
+    """Create the bucket on first run (public read only)."""
     settings = json.loads(SETTINGS_FILE.read_text()) if SETTINGS_FILE.exists() else {}
     if settings.get("bucket"):
         return settings["bucket"], settings["region"]
@@ -107,7 +93,6 @@ def _bucket(s3) -> tuple[str, str]:
     bucket = f"dock-app-{secrets.token_hex(6)}"
     extra = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
     s3.create_bucket(Bucket=bucket, **extra)
-    # Allow a "anyone can read" policy on this bucket only (no public ACLs).
     s3.put_public_access_block(Bucket=bucket, PublicAccessBlockConfiguration={
         "BlockPublicAcls": True, "IgnorePublicAcls": True, "BlockPublicPolicy": False, "RestrictPublicBuckets": False})
     s3.put_bucket_policy(Bucket=bucket, Policy=json.dumps({

@@ -1,6 +1,4 @@
-"""Dates and times written the same way on Mac and Windows. Python's "%-I"
-(an hour without a leading zero: "9:05 AM") only works on Mac and Linux;
-Windows spells it "%#I"."""
+"""Cross-platform time formatting ("%-I" doesn't work on Windows)."""
 
 import sys
 from datetime import date, datetime

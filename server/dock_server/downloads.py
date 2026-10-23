@@ -1,29 +1,8 @@
-"""Suggest where a file belongs: right after it downloads, or while you're
-choosing where to save it.
+"""Folder suggestions for new downloads and open Save dialogs.
 
-- New downloads: the desktop agent notices each finished download (see the
-  agent's tidy.py) and sends its name, the website it came from and the
-  user's folders. The phone shows "Put it in Documents/school/stat310? Move /
-  Not now". Nothing moves until the user taps Move or says "yes, move it".
-- Save windows: when a Save window opens on the Mac (see the agent's
-  savepanel.py), the phone shows "Save it in stat310/homework? Save here / Not
-  now", and an arrow next to the Save window shows the same. "Save here" (or
-  "save it there") switches the Save window to that folder and clicks Save.
-
-Both ask the AI for the most likely folder, using where the user put similar
-files before. Files Dock isn't fairly sure about get no suggestion, so there
-are no wrong nudges.
-
-Automatic suggestions are OFF by default, because each one is an AI call
-(about $0.001). The user turns them on with the switch on the phone or by
-voice ("turn on folder suggestions"); the choice is kept in
-.data/settings.json. With them off:
-- a Save window makes the phone ask first: "Want Dock to suggest a folder?"
-  Yes / No. The question goes away by itself when the Save window closes, the
-  user picks a folder in it, switches to another app, or asks Dock for
-  something else.
-- "where should this go?" still suggests a folder for the open Save window or
-  the newest download, once.
+The model picks the most likely folder based on where similar files went before.
+Nothing moves without the user's OK. Automatic suggestions are off by default
+(each one is a model call) and can be turned on from the phone or by voice.
 """
 
 import asyncio
@@ -41,7 +20,8 @@ from dock_server.state import DATA_DIR, State
 from dock_server.tools import tidy
 
 SETTINGS_FILE = DATA_DIR / "settings.json"
-UNDO_MOVE_SECONDS = 300  # "undo" this soon after a move means "put the files back"
+TIDY_PLAN_SECONDS = 600
+UNDO_MOVE_SECONDS = 300
 
 SUGGEST_SYSTEM = (
     "A student is putting a file on their Mac (it just downloaded, or they are choosing "
@@ -50,7 +30,10 @@ SUGGEST_SYSTEM = (
     "project or topic it is really about matters more than a vague name like \"Untitled\" "
     "or \"document\"), the file name, the website it came from, the folder names, the "
     "window it's saved from, and where the user put similar files before (follow their "
-    "habits). Watch "
+    "habits). When it's a copy or export of a document that is already saved in one of the "
+    "folders (\"the document it's saved from is in …\"), that folder is almost always right: "
+    "the PDF of a proposal goes next to the proposal. A broad folder like \"school\" or "
+    "\"Documents\" is only right when nothing more specific fits. Watch "
     "numbers: an HW4 file doesn't belong in an HW2 folder; use the course folder instead. "
     "If a new folder inside an existing one would clearly help, you may suggest it with "
     "new_folder true. If you are not fairly sure, reply with an empty \"to\".\n"
@@ -72,12 +55,11 @@ def _parse(answer: str, file: str, folders: set[str]) -> dict | None:
     return {"file": file, "to": to, "new_folder": new_folder, "why": str(reply.get("why", ""))}
 
 
-CONTENT_CHARS = 800  # how much of what the file says the AI sees
+CONTENT_CHARS = 800
 
 
 async def _suggest(file: str, about: str, folders: list[str], content: str = "") -> dict | None:
-    """Ask the AI where `file` belongs. `about` says where it comes from; `content`
-    is the start of what it says, if Dock could read it."""
+    """Ask the model where `file` belongs. `about`: its source; `content`: start of its text."""
     if not folders:
         return None
     past = "\n".join(f"- {m['file']} → {m['to']}" for m in tidy.past_moves()) or "(none yet)"
@@ -86,7 +68,8 @@ async def _suggest(file: str, about: str, folders: list[str], content: str = "")
               + f"\nWhere the user put earlier files:\n{past}"
               "\n\nThe user's folders:\n" + "\n".join(folders))
     try:
-        answer = await asyncio.to_thread(bedrock.ask, prompt, SUGGEST_SYSTEM, 150)
+        answer = await asyncio.to_thread(bedrock.ask, prompt, SUGGEST_SYSTEM, 150, bedrock.SMART_MODEL_ID,
+                                         purpose="folder suggestion")
     except Exception as e:
         print(f"Couldn't suggest a folder for {file}: {e!r}")
         return None
@@ -100,18 +83,17 @@ class NewDownloads:
         self.hub = hub
         self.state = state
         self.savings = savings
-        self.open_save_panel = ""  # file name in the Save window open on the Mac
-        self.save_panel_files: dict[str, float] = {}  # file -> when Dock made a Save-window suggestion
-        self.save_panel_event: dict = {}  # the Save window open on the Mac, as the agent described it
-        # For that Save window, when suggestions are off: "" (not asked yet), "asked"
-        # (the phone is asking), "yes" (suggest, also after a rename) or "no".
+        self.open_save_panel = ""
+        self.save_panel_files: dict[str, float] = {}
+        self.save_panel_event: dict = {}
+        # "" (not asked), "asked", "yes" or "no"
         self.save_choice = ""
-        self.last_download: dict = {}     # the newest finished download, as the agent described it
+        self.last_download: dict = {}
         settings = json.loads(SETTINGS_FILE.read_text()) if SETTINGS_FILE.exists() else {}
         self.automatic = bool(settings.get("folder_suggestions", False))
 
     async def set_automatic(self, on: bool) -> None:
-        """Turn automatic folder suggestions on or off, and tell the phones."""
+        """Turn automatic suggestions on or off."""
         self.automatic = on
         settings = json.loads(SETTINGS_FILE.read_text()) if SETTINGS_FILE.exists() else {}
         settings["folder_suggestions"] = on
@@ -119,13 +101,12 @@ class NewDownloads:
         SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
         await self.hub.push_phone("settings", folder_suggestions=on)
         if on and self.save_choice == "asked":
-            await self.answer_save_ask(True)  # turning them on answers the question too
+            await self.answer_save_ask(True)
 
     async def on_new(self, event: dict) -> None:
-        """The agent says a download just finished."""
+        """A download finished."""
         self.last_download = {**event, "at": time.time()}
         if self.automatic and time.time() - self.save_panel_files.get(event["file"], 0) >= 300:
-            # (If Dock already suggested a folder in the Save window, don't ask twice.)
             await self._suggest_download(event)
 
     async def _suggest_download(self, event: dict) -> dict | None:
@@ -139,18 +120,18 @@ class NewDownloads:
         return suggestion
 
     async def on_save_panel(self, event: dict) -> None:
-        """A Save window opened on the Mac (or its file name changed)."""
+        """A Save dialog opened (or its file name changed)."""
         self.open_save_panel = event["file"]
         self.save_panel_event = event
         if self.automatic or self.save_choice == "yes":
             await self._suggest_save(event)
         elif self.save_choice in ("", "asked"):
-            # Suggestions are off: ask first, since each suggestion uses a little AI.
+            # Suggestions are off: ask first.
             self.save_choice = "asked"
             await self.hub.push_phone("save_ask", file=event["file"], app=event.get("app", ""))
 
     async def answer_save_ask(self, yes: bool) -> None:
-        """The user answered "Want Dock to suggest a folder?" for the open Save window."""
+        """The user answered "Want Dock to suggest a folder?"."""
         if self.save_choice != "asked":
             return
         self.save_choice = "yes" if yes else "no"
@@ -160,7 +141,7 @@ class NewDownloads:
                                       detail=f"I'm not sure where {self.open_save_panel} belongs. Pick a folder in the Save window.")
 
     async def skip_save_ask(self, why: str) -> None:
-        """Something else happened, so the question no longer fits: drop it."""
+        """Drop the pending question."""
         if self.save_choice == "asked":
             print(f"Skipped the save question: {why}")
             self.save_choice = "no"
@@ -175,12 +156,14 @@ class NewDownloads:
     async def _suggest_save(self, event: dict) -> dict | None:
         file, app = event["file"], event.get("app", "")
         about = f"being saved from {app}" + (f", window \"{event['window_title']}\"" if event.get("window_title") else "")
+        if event.get("document_folder"):
+            about += f"; the document it's saved from is in {event['document_folder']}"
         content = await self._ask_text("save_panel_text")
         suggestion = await _suggest(file, about, event.get("folders", []), content)
         if self.open_save_panel != file:
-            return None  # the user already renamed the file or finished with the Save window
+            return None
         if not suggestion:
-            await self._clear_save_suggestion()  # an older suggestion (before a rename) no longer fits
+            await self._clear_save_suggestion()
             return None
         suggestion["app"] = app
         self.state.save_suggestion = suggestion
@@ -194,7 +177,7 @@ class NewDownloads:
         return suggestion
 
     async def _ask_text(self, action: str, **args) -> str:
-        """What the file says, from the Mac (only read when a suggestion is being made)."""
+        """The file's text, read only when making a suggestion."""
         try:
             return (await self.hub.ask_agent(action, timeout=6, **args)).get("text", "")
         except (AgentOffline, AgentError):
@@ -213,7 +196,7 @@ class NewDownloads:
             await self.hub.push_phone("save_panel_done")
 
     async def save_here(self, folder: str = "", new_folder: bool = False) -> dict:
-        """Switch the open Save window to `folder` (default: Dock's suggestion) and save."""
+        """Switch the open Save dialog to `folder` and save."""
         if not folder:
             if not self.state.save_suggestion:
                 raise AgentError("There's no Save window waiting for a folder.")
@@ -227,8 +210,7 @@ class NewDownloads:
         return result
 
     def register(self, mcp: MCPServer) -> None:
-        """The MCP tools for putting files where they belong (one file, a Save
-        window, or the whole Downloads folder)."""
+        """MCP tools for filing downloads and saves."""
 
         @mcp.tool()
         async def suggest_folders(all_downloads: bool = False) -> str:
@@ -244,7 +226,7 @@ class NewDownloads:
             if all_downloads:
                 return await tidy.plan(self.hub, self.state)
             if self.save_panel_event:
-                if self.save_choice == "asked":  # asking counts as yes to the phone's question
+                if self.save_choice == "asked":
                     self.save_choice = "yes"
                     await self.hub.push_phone("save_ask_done")
                 suggestion = await self._suggest_save(self.save_panel_event)
@@ -271,6 +253,8 @@ class NewDownloads:
               tidy suggestions, "put hw4.pdf on my Desktop"). For the new download
               Dock suggested a folder for, moves can stay empty: "yes, move it"
               uses Dock's folder, and "put it in Desktop instead" passes folder.
+            - Right after the Downloads tidy suggestions: "yes, move them" leaves
+              moves empty, and Dock moves the suggested files.
             Set new_folder (or a move's new_folder) to true only if the user agreed
             to create that folder."""
             folder = folder.strip().strip("/")
@@ -280,6 +264,8 @@ class NewDownloads:
                 if self.save_panel_event or self.state.save_suggestion:
                     result = await self.save_here(folder, new_folder)
                     return f"Saved {result['file']} in {result['to'].rsplit('/', 1)[-1]}."
+                if self.state.tidy_plan and time.time() - self.state.tidy_plan_at < TIDY_PLAN_SECONDS:
+                    return tidy._moved_text(await tidy.move(self.hub, self.state, self.savings, list(self.state.tidy_plan)))
                 if self.state.new_downloads:
                     waiting = self.state.new_downloads.values()
                     pending = [dict(w, to=folder, new_folder=new_folder) if folder else w for w in waiting]
@@ -348,7 +334,7 @@ class NewDownloads:
             await self.hub.push_phone("card", title="The file wasn't moved", detail=result["problems"][0])
 
     def voice_context(self) -> str:
-        """So "yes, move it", "put it in Desktop instead" or "save it there" works by voice."""
+        """Voice follow-ups: "yes, move it", "save it there"."""
         context = ""
         if time.time() - self.state.last_move_at < UNDO_MOVE_SECONDS:
             context += " Dock just moved files, so \"undo\" or \"put them back\" means undo_last_action."

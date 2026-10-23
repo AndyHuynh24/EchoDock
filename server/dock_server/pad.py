@@ -1,18 +1,7 @@
-"""Phone shortcut pad: big buttons on the phone for the app in front on the Mac.
+"""Phone shortcut pad: up to 9 buttons for the app in front on the computer.
 
-When the app in front changes, the agent sends its menus. We pick up to 8
-useful everyday commands (once per app, with Bedrock; the choice is saved in
-.data/pad_choices.json), put the items the user asked Dock about first, and
-send the buttons to the phone. Tapping a button clicks that menu item on the
-Mac.
-
-The phone also gets a few things to try saying, worth asking for real:
-- for the app: features from its own menus that are useful but easy to
-  forget or hard to find (picked by the AI once per app, saved in
-  .data/app_suggestions.json), never basics everyone knows like Undo;
-- from what is going on: a new download ("Where should hw4.pdf go?"),
-  "Summarize this" in apps you read in, and "What did I work on today?" late
-  in the day.
+Bedrock picks useful menu commands once per app (cached in .data/); items the user
+asked about come first. Tapping a button clicks that menu item.
 """
 
 import asyncio
@@ -26,13 +15,13 @@ from dock_server.menu_words import display_name, is_risky
 from dock_server.savings import Savings
 from dock_server.state import DATA_DIR, State
 
-PAD_SIZE = 8
-CHOICES_FILE = DATA_DIR / "pad_choices.json"
+PAD_SIZE = 9
+CHOICES_FILE = DATA_DIR / "pad_choices_v2.json"
 SUGGESTIONS_FILE = DATA_DIR / "app_suggestions.json"
 READING_APPS = {"Safari", "Google Chrome", "Arc", "Firefox", "Microsoft Edge", "Preview", "Adobe Acrobat Reader",
                 "Microsoft Word", "Pages", "TextEdit", "Mail", "Notes", "Books"}
 SKIP_MENUS = {"History", "Bookmarks", "Favorites", "Window", "Help"}
-NEW_DOWNLOAD_SECONDS = 30 * 60  # "Where should … go?" for downloads newer than this
+NEW_DOWNLOAD_SECONDS = 30 * 60
 
 SUGGEST_SYSTEM = (
     "You suggest what someone using a Mac app every day (a student or a professional) would really "
@@ -50,8 +39,11 @@ SUGGEST_SYSTEM = (
 
 PICK_SYSTEM = (
     "You choose the most useful everyday commands of a Mac app for a touch shortcut pad. "
-    "Prefer actions people repeat while working (like split, undo, run, export, new tab). "
-    "Avoid settings, help, window management, quitting and deleting. "
+    "Prefer actions people repeat while working that are worth a button (like split clip, run, "
+    "export, add a chart, insert a comment). "
+    "Never pick basics everyone already knows the keys for (new, open, close, save, print, undo, "
+    "redo, cut, copy, paste, select all, find). Avoid settings, help, window management, quitting "
+    "and deleting. "
     "Reply with only the item numbers, separated by commas, most useful first."
 )
 
@@ -61,12 +53,12 @@ def _key(path: list[str]) -> str:
 
 
 def _title(path: list[str]) -> str:
-    """Button text. Items in submenus include their submenu, e.g. "Share › File"."""
+    """Button label, including its submenu."""
     name, parent = display_name(path[-1]), display_name(path[-2]) if len(path) > 2 else ""
     return f"{parent} › {name}" if parent and parent.lower() != name.lower() else name
 
 
-# Menu items everyone already knows: never suggested, even if the AI picks one.
+# Basics that are never suggested.
 BASICS = re.compile(r"^(new|open|close|save|print|undo|redo|cut|copy|paste|select all|find|quit|"
                     r"minimi[sz]e|zoom|preferences|settings|help|new tab|new window)\b", re.IGNORECASE)
 
@@ -95,35 +87,34 @@ class Pad:
         self.hub = hub
         self.state = state
         self.savings = savings
-        self.downloads = None  # set by main.py; for "Where should … go?"
+        self.downloads = None
         self.choices: dict[str, list[str]] = json.loads(CHOICES_FILE.read_text()) if CHOICES_FILE.exists() else {}
         self.suggestions: dict[str, list[str]] = json.loads(SUGGESTIONS_FILE.read_text()) if SUGGESTIONS_FILE.exists() else {}
 
     def _pick(self, app: str, items: list[dict]) -> list[str]:
-        candidates = [i for i in items if not is_risky(i["path"][-1])]
+        candidates = [i for i in items if not is_risky(i["path"][-1]) and not BASICS.match(display_name(i["path"][-1]))]
         lines = [
             f"{n}. {_key(i['path'])}" + (f" ({i['shortcut']})" if i["shortcut"] else "")
             for n, i in enumerate(candidates, start=1)
         ]
-        answer = bedrock.ask(f"App: {app}\n\nMenu items:\n" + "\n".join(lines), PICK_SYSTEM, max_tokens=60)
+        answer = bedrock.ask(f"App: {app}\n\nMenu items:\n" + "\n".join(lines), PICK_SYSTEM, max_tokens=60, purpose="pad buttons")
         numbers = [int(n) for n in re.findall(r"\d+", answer) if 1 <= int(n) <= len(candidates)]
         return [_key(candidates[n - 1]["path"]) for n in numbers][:PAD_SIZE]
 
     def _suggest_for_app(self, app: str, items: list[dict]) -> list[str]:
-        """Useful-but-forgettable things to ask about this app (one AI call per app, ever)."""
-        # History, bookmarks and window lists are the user's own pages, not features.
+        """Things worth asking about this app (one model call per app)."""
         candidates = [i for i in items if not is_risky(i["path"][-1]) and i["path"][0] not in SKIP_MENUS][:500]
         lines = [f"{n}. {_key(i['path'])}" for n, i in enumerate(candidates, start=1)]
         try:
             answer = bedrock.ask(f"App: {app}\n\nMenu items:\n" + "\n".join(lines), SUGGEST_SYSTEM, 300,
-                                 bedrock.SMART_MODEL_ID)
+                                 bedrock.SMART_MODEL_ID, purpose="app suggestions")
         except Exception as e:
             print(f"Couldn't pick suggestions for {app}: {e!r}")
             return []
         return _parse_suggestions(answer, candidates)
 
     def examples(self, app: str, buttons: list[dict]) -> list[str]:
-        """Things worth asking right now: what is going on first, then this app's own."""
+        """Suggestions for right now: context first, then the app's own."""
         now = []
         new = self.downloads.last_download if self.downloads else {}
         if new and time.time() - new.get("at", 0) < NEW_DOWNLOAD_SECONDS and new["file"] not in self.state.new_downloads:
@@ -145,11 +136,11 @@ class Pad:
             CHOICES_FILE.write_text(json.dumps(self.choices, indent=2))
         if app not in self.suggestions:
             self.suggestions[app] = await asyncio.to_thread(self._suggest_for_app, app, items)
-            if self.suggestions[app]:  # (if the AI failed, try again next time)
+            if self.suggestions[app]:
                 DATA_DIR.mkdir(exist_ok=True)
                 SUGGESTIONS_FILE.write_text(json.dumps(self.suggestions, indent=2))
 
-        # Items the user asked Dock about come first: they clearly need them.
+        # Items the user asked about come first.
         asked = sorted(
             ((count, _key(list(path))) for (asked_app, path), count in self.state.times_asked.items() if asked_app == app),
             reverse=True,
@@ -158,7 +149,8 @@ class Pad:
         by_key = {_key(i["path"]): i for i in items}
         buttons = [
             {"title": _title(by_key[k]["path"]), "shortcut": by_key[k]["shortcut"], "path": by_key[k]["path"]}
-            for k in order if k in by_key and not is_risky(by_key[k]["path"][-1])
+            for k in order
+            if k in by_key and not is_risky(by_key[k]["path"][-1]) and not BASICS.match(display_name(by_key[k]["path"][-1]))
         ][:PAD_SIZE]
         tries = self.examples(app, buttons)
 
@@ -171,7 +163,6 @@ class Pad:
             await ws.send_text(json.dumps(self.state.pad))
 
     async def press(self, message: dict) -> None:
-        """A button on the phone was tapped."""
         path = message.get("path") or []
         if not self.state.pad or not path:
             return

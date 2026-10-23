@@ -1,11 +1,8 @@
-"""Simulated Alexa+: the phone sends what the user said (or typed), a Bedrock
-model picks Dock's MCP tools, and we call them through our own MCP endpoint
-over Streamable HTTP, the same way Alexa+ would. The phone shows or speaks
-the reply.
+"""Simulated Alexa+ voice mode.
 
-The model may call several tools in a row for bigger tasks, e.g. find_files
-and then open_file. The last few exchanges are remembered so follow-ups like
-"open the second one" work."""
+A Bedrock model picks Dock's tools and calls them through our own MCP endpoint
+(Streamable HTTP), the same way Alexa+ does. Recent turns are kept for follow-ups.
+"""
 
 import asyncio
 import re
@@ -16,7 +13,7 @@ import httpx2
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
-from dock_server import bedrock
+from dock_server import bedrock, tracing
 from dock_server.tools import writing
 from dock_server.tools.app_help import wants_to_learn
 
@@ -27,6 +24,13 @@ SYSTEM = (
     "time, even if you did the same thing earlier in the conversation. Never say you "
     "opened, saved, moved, read or clicked something unless a tool did it in this turn. "
     "Never say you can't find something before searching for it. "
+    "A question about a fact in the user's own files, email, notes or calendar (\"what's the "
+    "Wi-Fi password the landlord sent\", \"when is the CS589 project due\", \"how many late days "
+    "do I get\", \"what's my confirmation number\") is search_my_stuff, not search_web or reply. "
+    "Dock never deletes files, sends or replies to email, runs commands, or types passwords, "
+    "and no tool can: for those, say so in one short sentence (never offer or ask to do them), "
+    "then offer the closest thing Dock can do (tidy suggestions, checking email, a writing fix), "
+    "never anything with the Trash. "
     "Only open or act on what the user named: if it isn't found, say so and ask what they "
     "meant, but never suggest or open a different app, folder or file on your own (not even "
     "one you mentioned earlier). \"Open X folder\" means open_folder; a name like a class "
@@ -37,12 +41,14 @@ SYSTEM = (
     "For any question about how to do something or where something is in an app, call "
     "app_help right away: it looks at whatever app is in front on the Mac, so never ask the "
     "user which app they are using. That includes a website in the browser: \"how do I check my costs?\" "
-    "on the AWS console is app_help, which looks at the page. But \"read this to me\" or \"summarize this\" means read, "
+    "on the AWS console is app_help, which looks at the page. Getting back something the user lost in "
+    "the app (\"I deleted a paragraph yesterday, can I recover it?\", \"restore the old version\") is "
+    "app_help too: apps keep older versions; never say it can't be done, and \"yesterday\" here is not get_recap. But \"read this to me\" or \"summarize this\" means read, "
     "never app_help. "
     "Never move files unless the user has clearly agreed: after suggest_folders with "
-    "all_downloads, tell them the suggestions briefly (how many, and a couple of examples) "
-    "and ask any questions, then call put_in_folder only when they say yes or tell you "
-    "where things go. "
+    "all_downloads, Dock has told them how many suggestions there are (the list is on the "
+    "screen); call put_in_folder only when they say yes (moves empty: Dock moves the suggested "
+    "files) or tell you where things go. "
     "\"Where should this go?\" or \"where should I save this?\" (about a file, not an app "
     "feature) means suggest_folders; \"turn on/off folder suggestions\" means set_folder_suggestions. "
     "When Dock has suggested a folder for a new download or a Save window (listed below), "
@@ -79,9 +85,7 @@ SYSTEM = (
 
 MAX_STEPS = 6
 
-# The model must call a tool on its first step, so it can't just claim it did
-# something. When no Dock tool fits (small talk, a question back to the user),
-# it calls this "reply" tool instead, which we handle here.
+# The model must call a tool on its first step; "reply" covers small talk and questions.
 REPLY_TOOL = {
     "toolSpec": {
         "name": "reply",
@@ -92,10 +96,8 @@ REPLY_TOOL = {
     }
 }
 
-# Commands that just happen: when one of these worked, Dock doesn't talk. The
-# phone and the Mac show a ✓ and play a short sound instead. (app_help counts
-# when it did the command instead of showing where it is.)
-QUIET_TOOLS = {"open_folder", "open_app", "open_file", "arrange_windows", "do_app_action",
+# Commands that need no spoken reply; the screens show a check mark instead.
+QUIET_TOOLS = {"open_folder", "open_app", "open_file", "arrange_windows", "close_windows", "do_app_action",
                "put_in_folder", "undo_last_action", "improve_writing", "apply_writing", "search_web"}
 
 
@@ -110,27 +112,34 @@ def _is_quiet(call: dict, text: str) -> bool:
     return name in QUIET_TOOLS
 
 
-# "Close the Finder window" is the app's Close Window command, not arranging
-# windows (the model sometimes picks arrange_windows for it).
+# "Close the Finder window" is close_windows, not arrange_windows.
 CLOSE_OR_MINIMIZE = re.compile(r"\b(close|minimi[sz]e)\b", re.IGNORECASE)
-# ...and the app it names: "close all fighter windows" -> "fighter" (Dock's agent
-# matches that loosely to the open apps: Finder).
 CLOSE_WHICH_APP = re.compile(r"\b(?:close|minimi[sz]e)\s+(?:all\s+)?(?:of\s+)?(?:the\s+|my\s+)?(.+?)\s+(?:windows?|tabs?)\b",
                              re.IGNORECASE)
+CLOSE_APP = re.compile(r"^\W*(?:(?:please|can you|could you|dock)[\s,]+)*(?:close|quit)\s+(?:the\s+|my\s+)?"
+                       r"([\w .-]+?)(?:\s+app)?(?:\s+(?:please|now|for me))*[\s.!?]*$", re.IGNORECASE)
+
+
+def apps_match(said: str, named: str) -> bool:
+    """Normalize app names for comparison."""
+    norm = lambda name: re.sub(r"[^a-z0-9]", "", name.lower())
+    return bool(norm(said)) and (norm(said) in norm(named) or norm(named) in norm(said))
+
+
 NOT_AN_APP = {"this", "that", "these", "those", "current", "front", "other", "all", "every", "open", "the"}
-# "Close all windows except VS Code" / "hide everything but Chrome": keep that app, hide
-# the others (hidden, never quit: nothing unsaved is lost).
+# "Close/hide everything except X" and "close all windows".
+CLEAR_ALL = re.compile(r"^\W*(?:(?:hey|ok(?:ay)?|so|dock|can you|could you|please)[\s,]+)*(?:close|hide|minimi[sz]e)\s+"
+                       r"(?:all|every|everything)\s*(?:of\s+)?(?:the\s+|my\s+)?(?:open\s+)?(?:windows?|apps?)?"
+                       r"(?:\s+(?:on|from)\s+(?:the\s+|my\s+)?(?:desktop|screen|computer|mac))?(?:\s+(?:please|now|for me))*[\s.!?]*$",
+                       re.IGNORECASE)
 EVERYTHING_BUT = re.compile(
     r"\b(?:close|hide|minimi[sz]e|get rid of|clear)\b.*?\b(?:all|every\w*|other|others|the rest)\b.*?"
     r"\b(?:except(?: for)?|but|besides|other than|apart from|aside from)\s+(?:the\s+|my\s+)?(.+?)"
     r"(?:\s+(?:app|apps|window|windows))?(?:,?\s+(?:please|now|for me))*[\s.!?]*$", re.IGNORECASE)
-# do_app_action clicks what Dock last pointed at, so it's only for "do it" and
-# the like; the model sometimes calls it for "close the TextEdit window".
+# do_app_action is only for "do it" style follow-ups.
 DO_IT = re.compile(r"^\W*(ok(ay)?|yes|yeah|yep|sure|please|now|go ahead|alright)?[\s,]*(please\s+)?"
                    r"(do it|do that|click it|click that|press it|press that|yes|yeah|go ahead|sure)\b", re.IGNORECASE)
-# "Check this text" / "proofread this" is writing help (typos, grammar, wording),
-# which the model sometimes sends to read as if it meant "summarize". "Check my
-# email" isn't, so an email only counts as "this email".
+# "Check/proofread this" is writing help, not reading.
 CHECK_WRITING = re.compile(
     r"^(?:(?:hey|ok(?:ay)?|so|can you|could you|would you|please|dock)[\s,]+)*"
     r"(?:check|proof\s?read|look over|go over|read over|double[- ]check|polish|correct|clean up|fix up|review)"
@@ -138,43 +147,65 @@ CHECK_WRITING = re.compile(
     r"(text|writing|paragraph|sentence|essay|message|draft|reply|wording|spelling|grammar|email|bit|part|it|this)"
     r"(?:\s+(?:for|please|now|again)\b.*)?[\s.!?]*$", re.IGNORECASE)
 CHECK_HOW = "check it for typos and grammar, and improve the wording a little"
-# "How do I check my costs?" while on a website (the AWS console in Safari) is about
-# what's on screen: app_help looks at the menus, the page's buttons and then the
-# screen, and still offers Google when none of that has it. Only "google X" /
-# "look up X" goes straight to the search offer.
+# "How do I ..." goes to app_help; only explicit "google X" goes to search.
 HOW_OR_WHERE = re.compile(r"^\W*(?:(?:hey|ok(?:ay)?|so|dock)[\s,]+)*(how (?:do|can|would|should) i|how to|where (?:do|can|is|are|should|to)|where's)\b",
                           re.IGNORECASE)
+GET_BACK = re.compile(r"\b(recover|restore|undelete|get (?:it|that|this|them) back|bring (?:it|that|this) back|older version|previous version)\b",
+                      re.IGNORECASE)
 SAID_SEARCH = re.compile(r"\b(google|search|look (?:it |that )?up|online|on the web|the internet)\b", re.IGNORECASE)
-# Same for "read this to me" / "summarize this", which the model sometimes sends
-# to app_help as if reading were a feature of the app.
+# "Read/summarize this" is reading, not app_help.
 READ_THIS = re.compile(r"^(?:can you |could you |please )?(read|summari[sz]e)\b(?! about)", re.IGNORECASE)
 
+# Fix arguments where the model merged two of them with leftover markup.
+LEAKED_ARGUMENT = re.compile(r'</?parameter(?:\s+name="?(\w+)"?)?\s*>')
+
+
+def repair_arguments(args: dict) -> None:
+    for key, value in list(args.items()):
+        if isinstance(value, str) and LEAKED_ARGUMENT.search(value):
+            first, *rest = LEAKED_ARGUMENT.split(value)
+            args[key] = first.strip()
+            for name, part in zip(rest[::2], rest[1::2]):
+                if name and part.strip() and not args.get(name):
+                    args[name] = part.strip()
+
+
 def fix_call(call: dict, text: str, context: str = "") -> None:
-    """Correct the model's tool choice where the user's own words are clear, in
-    place. (The model gets these few wrong now and then, and rewording its
-    instructions to fix one tends to break another.) context: the facts the
-    model was given (see main.py)."""
-    # A plain "undo" is the app's own Undo, unless Dock has just moved files.
+    """Correct the model's tool choice in a few cases where the user's words are unambiguous."""
+    repair_arguments(call["input"])
+    # A plain "undo" is the app's Undo unless Dock just moved files.
     if call["name"] == "undo_last_action" and "Dock just moved files" not in context and not re.search(
             r"\b(files?|move|moved|back|downloads?|folders?)\b", text, re.IGNORECASE):
         call["name"], call["input"] = "app_help", {"question": text}
-    # "cs589 folder" is the folder even when a workspace has the same name (and the other way round).
     said_folder, said_workspace = re.search(r"\bfolder\b", text, re.I), re.search(r"\bworkspace\b", text, re.I)
     if call["name"] == "workspace" and call["input"].get("action") == "open" and said_folder and not said_workspace:
         call["name"], call["input"] = "open_folder", {"name": call["input"].get("name", "")}
     elif call["name"] == "open_folder" and said_workspace and not said_folder:
         call["name"], call["input"] = "workspace", {"action": "open", "name": call["input"].get("name", "")}
-    # "Yes" / "do it" right after Dock offered something (a writing suggestion, a Google search): that.
+    # "Yes" / "do it" right after an offer accepts it.
     offer = writing.newest_offer() if call["name"] == "do_app_action" and DO_IT.search(text) else ""
     if offer == "writing":
         call["name"], call["input"] = "apply_writing", {"where": "replace"}
     elif offer == "search":
         call["name"], call["input"] = "search_web", {"query": writing.search_offer()["query"], "go": True}
-    if call["name"] == "search_web" and not call["input"].get("go") and HOW_OR_WHERE.search(text) and not SAID_SEARCH.search(text):
+    if (call["name"] == "search_web" and not call["input"].get("go") and (HOW_OR_WHERE.search(text) or GET_BACK.search(text))
+            and not SAID_SEARCH.search(text)):
         call["name"], call["input"] = "app_help", {"question": text}
-    # Opening a search is only for a yes to Dock's offer: otherwise offer it first.
+    # "Can I recover it?" is about the app in front (version history).
+    if (GET_BACK.search(text) and call["name"] in ("reply", "get_recap", "search_my_stuff", "get_schedule", "find_files")
+            and not re.search(r"\b(files?|downloads?|folders?|emails?)\b", text, re.IGNORECASE)):
+        call["name"], call["input"] = "app_help", {"question": text}
     if call["name"] == "search_web" and call["input"].get("go") and not writing.search_offer():
         call["input"]["go"] = False
+    if call["name"] in ("focus_status", "reply") and re.search(r"\b(need|take|taking|want|have) a break\b", text, re.IGNORECASE):
+        call["name"], call["input"] = "control_focus", {"action": "break"}
+    clear_all = CLEAR_ALL.search(text.strip())
+    if clear_all and call["name"] in ("app_help", "arrange_windows", "do_app_action", "reply", "close_windows"):
+        if re.search(r"\bclose\b", text, re.IGNORECASE):
+            call["name"], call["input"] = "close_windows", {"app": "all"}
+        else:
+            call["name"], call["input"] = "arrange_windows", {"layout": [], "hide_others": True}
+        return
     keep = EVERYTHING_BUT.search(text.strip())
     if keep and call["name"] in ("app_help", "arrange_windows", "do_app_action", "search_web", "reply"):
         app = "" if keep.group(1).lower() in ("this", "this one", "this app", "this window", "it") else keep.group(1)
@@ -182,6 +213,21 @@ def fix_call(call: dict, text: str, context: str = "") -> None:
         return
     if call["name"] == "do_app_action" and not DO_IT.search(text):
         call["name"], call["input"] = "app_help", {"question": text}
+    named = call["input"].get("app", "") or next(
+        (place.get("app") for place in call["input"].get("layout", []) if place.get("app")), "")
+    close_app = CLOSE_APP.search(text.strip())
+    if (close_app and named and call["name"] in ("arrange_windows", "app_help")
+            and apps_match(close_app.group(1), named)):
+        call["name"], call["input"] = "close_windows", {"app": named, "which": "all"}
+        return
+    closing = re.search(r"\bclose\b.*\bwindows?\b", text, re.IGNORECASE) and not re.search(r"\btabs?\b", text, re.IGNORECASE)
+    if closing and call["name"] in ("arrange_windows", "app_help", "do_app_action", "reply"):
+        said = CLOSE_WHICH_APP.search(text)
+        if not named and said and said.group(1).lower() not in NOT_AN_APP:
+            named = said.group(1)
+        which = "all" if re.search(r"\b(all|every)\b", text, re.IGNORECASE) else "front"
+        call["name"], call["input"] = "close_windows", {"app": named, "which": which}
+        return
     if call["name"] == "arrange_windows" and CLOSE_OR_MINIMIZE.search(text):
         named = next((place.get("app") for place in call["input"].get("layout", []) if place.get("app")), "")
         said = CLOSE_WHICH_APP.search(text)
@@ -198,26 +244,22 @@ def fix_call(call: dict, text: str, context: str = "") -> None:
     if call["name"] == "app_help" and read:
         call["name"], call["input"] = "read", {"how": "aloud" if read.group(1).lower() == "read" else "summarize"}
     if call["name"] == "app_help":
-        # Decide "do it" or "show me" from the user's own words: the model
-        # sometimes rewrites "split screen" as "how do I split the screen".
+        # Decide "do it" vs "show me" from the user's own words.
         call["input"]["do_it"] = not wants_to_learn(text)
 
 
-# Tools whose answer needs another step (the model reads the list and acts on it).
-NEEDS_FOLLOW_UP = {"find_files"}  # (and suggest_folders for the whole Downloads folder, see below)
-# "Open the stat525 file from yesterday": find_files, then open_file. Sometimes the
-# model just says "I opened Andy_HW4.Rmd" after find_files without opening it, so
-# Dock opens the file it named (or the newest match) itself.
+# Tools whose result needs a follow-up step.
+NEEDS_FOLLOW_UP = {"find_files"}
+# If the model names a found file without opening it, open it.
 WANTS_OPEN = re.compile(r"\b(open|show|pull up|bring up|get me)\b", re.IGNORECASE)
 FOUND_PATH = re.compile(r"\(path: (.+?)\)$", re.MULTILINE)
 
 
 def _named_file(found: list[str], said: str) -> str:
-    """The found path whose file name the model mentioned, else the newest one."""
+    """The found path the model mentioned, else the newest."""
     lowered = said.lower()
     return next((path for path in found if Path(path).name.lower() in lowered), found[0])
 
-# Recent conversation, as plain user/assistant text turns.
 HISTORY_TURNS = 6
 FORGET_AFTER_SECONDS = 600
 _history: list[dict] = []
@@ -238,15 +280,34 @@ def _remember(text: str, reply: str, quiet: bool = False) -> tuple[str, bool]:
 
 
 async def answer(text: str, mcp_url: str, token: str, context: str = "") -> tuple[str, bool]:
-    """Dock's reply, and whether it was a command that just happened (quiet:
-    show a ✓ and play a sound instead of speaking)."""
+    """Returns the reply and whether it's a quiet command (no speech)."""
+    trace = tracing.start("voice", text)
+    try:
+        reply, quiet = await _answer(text, mcp_url, token, context, trace["id"])
+    except Exception as e:
+        tracing.finish(trace, "", error=repr(e)[:300])
+        raise
+    tracing.finish(trace, reply, quiet=quiet)
+    return reply, quiet
+
+
+async def _call_tool(mcp: Client, name: str, args: dict, **note):
+    """Call one MCP tool and record it in the trace."""
+    traced = tracing.step(type="tool", name=name, **note)
+    started = time.perf_counter()
+    result = await mcp.call_tool(name, args)
+    traced.update(seconds=round(time.perf_counter() - started, 3), ok=not result.is_error)
+    return result
+
+
+async def _answer(text: str, mcp_url: str, token: str, context: str, trace_id: str) -> tuple[str, bool]:
     global _last_used
     if time.time() - _last_used > FORGET_AFTER_SECONDS:
         _history.clear()
     _last_used = time.time()
 
-    # Some tools take a while (a tidy-up plan reads many files), so allow up to 90 s.
-    http = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=90)
+    # Some tools (tidy-up plans) are slow.
+    http = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}", tracing.HEADER: trace_id}, timeout=90)
     async with http, Client(streamable_http_client(mcp_url, http_client=http)) as mcp:
         listed = await mcp.list_tools()
         tools = [
@@ -254,21 +315,24 @@ async def answer(text: str, mcp_url: str, token: str, context: str = "") -> tupl
             for t in listed.tools
         ] + [REPLY_TOOL]
         messages = [*_history, {"role": "user", "content": [{"text": text}]}]
-        found, opened = [], False  # (files find_files listed in this request; whether one was opened)
+        found, opened = [], False
 
         for step in range(MAX_STEPS):
             response = await asyncio.to_thread(bedrock.converse, messages, SYSTEM, tools, 300, step == 0,
-                                               bedrock.ROUTER_MODEL_ID, context)
+                                               bedrock.ROUTER_MODEL_ID, context, "router")
             message = response["output"]["message"]
             messages.append(message)
             calls = [block["toolUse"] for block in message["content"] if "toolUse" in block]
             for call in calls:
+                before = call["name"]
                 fix_call(call, text, context)
+                if call["name"] != before:
+                    tracing.step(type="fix", **{"from": before, "to": call["name"]})
             reply = next((c for c in calls if c["name"] == "reply"), None)
             said = bedrock.message_text(message) if response["stopReason"] != "tool_use" else (
                 str(reply["input"].get("text", "")).strip() if reply else "")
             if (response["stopReason"] != "tool_use" or reply) and found and not opened and WANTS_OPEN.search(text):
-                result = await mcp.call_tool("open_file", {"path": _named_file(found, said)})
+                result = await _call_tool(mcp, "open_file", {"path": _named_file(found, said)}, guard=True)
                 print(f"Voice -> open_file (the model only said it) -> {'error' if result.is_error else 'ok'}")
                 return _remember(text, _tool_text(result), not result.is_error)
             if response["stopReason"] != "tool_use":
@@ -277,7 +341,7 @@ async def answer(text: str, mcp_url: str, token: str, context: str = "") -> tupl
                 return _remember(text, said or "Okay.")
             results = []
             for call in calls:
-                result = await mcp.call_tool(call["name"], call["input"])
+                result = await _call_tool(mcp, call["name"], call["input"])
                 print(f"Voice -> {call['name']} {call['input']} -> {'error' if result.is_error else 'ok'}")
                 if call["name"] == "find_files" and not result.is_error:
                     found = FOUND_PATH.findall(_tool_text(result))
@@ -289,10 +353,9 @@ async def answer(text: str, mcp_url: str, token: str, context: str = "") -> tupl
                         "status": "error" if result.is_error else "success",
                     }
                 })
-            # Most tools already reply in a finished spoken sentence. When one such
-            # tool worked, say its answer directly and skip another model call.
+            # Tools that already return a spoken sentence skip the second model call.
             only = results[0]["toolResult"] if len(calls) == 1 else None
-            follow_up = calls[0]["name"] in NEEDS_FOLLOW_UP or calls[0]["input"].get("all_downloads")
+            follow_up = calls[0]["name"] in NEEDS_FOLLOW_UP
             if only and only["status"] == "success" and not follow_up:
                 said = only["content"][0]["text"]
                 return _remember(text, said, _is_quiet(calls[0], said))

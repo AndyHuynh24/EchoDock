@@ -1,14 +1,6 @@
-"""The phone needs an HTTPS address for the camera, microphone and keeping the
-screen awake. Dock starts a free Cloudflare quick tunnel to get one, and reads
-its address so the setup page can show the phone link as a QR code.
+"""Public HTTPS address via a Cloudflare quick tunnel, restarted if it stops responding.
 
-Quick tunnels sometimes drop (for example after the Mac sleeps): cloudflared
-keeps running but the address stops working. A watchdog checks the address
-every 30 s, and after 3 failures in a row starts a fresh tunnel. The
-installed phone app finds the new address by itself (see webapp.py).
-
-If DOCK_PUBLIC_URL is set (e.g. when the server is hosted on AWS, or behind
-your own named tunnel), that address is used and no tunnel is started.
+Set DOCK_PUBLIC_URL to use your own address instead.
 """
 
 import atexit
@@ -24,7 +16,7 @@ import urllib.request
 _public_url = os.environ.get("DOCK_PUBLIC_URL", "").rstrip("/")
 _problem = ""
 _process: subprocess.Popen | None = None
-CHECK_EVERY = 30   # seconds between checks of the public address
+CHECK_EVERY = 30
 FAILS_BEFORE_RESTART = 3
 
 
@@ -85,7 +77,7 @@ def _works(url: str) -> bool:
 
 
 def _watch(port: int) -> None:
-    """Start a new tunnel when the address has stopped working."""
+    """Restart the tunnel when the address stops working."""
     global _public_url
     fails = 0
     while True:

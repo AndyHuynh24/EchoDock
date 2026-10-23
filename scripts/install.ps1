@@ -1,7 +1,7 @@
 # One-time setup for Dock on Windows 10 or 11. Safe to run again.
 #   git clone <repo>; cd OneDock
 #   powershell -ExecutionPolicy Bypass -File scripts\install.ps1
-# After this, open Dock any time from the Start menu (OneDock) or the desktop shortcut.
+# Then open Dock from the Start menu or the desktop shortcut.
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot

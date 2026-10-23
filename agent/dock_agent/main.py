@@ -1,10 +1,8 @@
-"""Dock desktop agent. Connects out to the Dock server, waits for jobs, runs
-them, and sends back the result. Reconnects automatically.
+"""Dock desktop agent: connects out to the server, runs jobs, and reconnects automatically.
 
-Run it from the agent folder:  uv run python -m dock_agent.main
-Settings (environment variables):
-  DOCK_SERVER  e.g. ws://localhost:8000 (default) or wss://your-domain
-  DOCK_TOKEN   the same token the server uses
+    uv run python -m dock_agent.main
+
+Environment: DOCK_SERVER (default ws://localhost:8000), DOCK_TOKEN.
 """
 
 import json
@@ -38,7 +36,7 @@ def handle(job: dict) -> dict:
 
 
 def stay_connected(server: str, url: str) -> None:
-    """Connect to the server, run the jobs it sends, and reconnect if the connection drops."""
+    """Run jobs from the server, reconnecting when the connection drops."""
     while True:
         try:
             with connect(url) as ws:
@@ -67,8 +65,7 @@ def main() -> None:
         sys.exit("Please set DOCK_TOKEN to the same value the server uses.")
     url = f"{server}/ws/agent?token={quote(token)}"
 
-    # The pointer, the bubble and the menu bar need the macOS event loop on the
-    # main thread, so the server connection runs on a background thread.
+    # UI needs the main thread, so the connection runs in the background.
     overlay.start_app()
     menubar.start()
     bubble.on_focus = menubar.set_focus
@@ -87,7 +84,7 @@ def main() -> None:
 
 
 def start_talk_key() -> None:
-    """The talk key needs the Accessibility permission; until it's allowed, try again every few seconds."""
+    """Register the talk key, retrying until Accessibility is allowed."""
     if talk.start():
         print(f"Talk key ready: press {hotkey.KEY_NAME}")
         return
@@ -98,7 +95,7 @@ def start_talk_key() -> None:
 
 
 def first_run() -> bool:
-    """Show the welcome window until everything Dock needs is allowed."""
+    """Show the welcome window until all permissions are granted."""
     from dock_agent import menus
     return not menus.check_permission() or speech.permissions()["microphone"] != "allowed"
 

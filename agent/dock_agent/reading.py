@@ -1,11 +1,5 @@
-"""Get the text the user means by "read this" or "summarize this":
-
-1. Text selected in the app in front (asked through Accessibility).
-2. If the app doesn't share that, copy the selection with Command-C and read
-   the clipboard. The clipboard is put back exactly as it was afterwards.
-3. Otherwise, the document open in the front window (PDF, Word, text...).
-
-Or a specific file, e.g. one found with find_files.
+"""Text for "read this" / "summarize this": the selection (via Accessibility, or a
+clipboard copy that is restored afterwards), else the front document, or a given file.
 """
 
 import subprocess
@@ -29,9 +23,9 @@ from dock_agent.files import _visible
 from dock_agent.menus import _get, front_app
 
 MAX_CHARS = 40_000
-KEY_C = 8  # the "c" key
-KEY_V = 9  # the "v" key
-KEY_RIGHT = 124  # the right arrow
+KEY_C = 8
+KEY_V = 9
+KEY_RIGHT = 124
 TEXTUTIL_TYPES = {".doc", ".docx", ".rtf", ".rtfd", ".odt", ".html", ".htm", ".webarchive"}
 PLAIN_TYPES = {".txt", ".md", ".rmd", ".qmd", ".csv", ".py", ".r", ".js", ".ts", ".json", ".tex", ".log"}
 
@@ -86,7 +80,7 @@ def _command(key: int, flags: int = kCGEventFlagMaskCommand) -> None:
 
 
 def _copy_selection() -> str:
-    """Press Command-C, read the copied text, then put the clipboard back."""
+    """Copy with Command-C, read the clipboard, then restore it."""
     board = NSPasteboard.generalPasteboard()
     saved = _clipboard()
     before = board.changeCount()
@@ -96,22 +90,21 @@ def _copy_selection() -> str:
         if board.changeCount() != before:
             break
     if board.changeCount() == before:
-        return ""  # nothing was selected
+        return ""
     text = str(board.stringForType_(NSPasteboardTypeString) or "")
     _restore(saved)
     return text
 
 
 def _focused(pid: int):
-    """The part of the app that has the keyboard. VS Code, Chrome and other
-    web-based apps only share it (and its selected text) once asked to."""
+    """The focused element (Chromium apps expose it only on request)."""
     app = AXUIElementCreateApplication(pid)
     AXUIElementSetAttributeValue(app, "AXManualAccessibility", True)
     return _get(app, "AXFocusedUIElement")
 
 
 def selection() -> dict:
-    """Only the text selected in the app in front (for "fix the grammar in this")."""
+    """Only the selected text in the front app."""
     app_name, pid = front_app()
     focused = _focused(pid)
     text = str(_get(focused, "AXSelectedText") or "") if focused is not None else ""
@@ -123,9 +116,7 @@ def selection() -> dict:
 
 
 def replace_selection(pid: int, text: str) -> str:
-    """Put `text` in place of the selection, in the app's own text: through
-    Accessibility if the app allows it, else by pasting it (and putting the
-    clipboard back). Either way the app's own Undo undoes it."""
+    """Replace the selection via Accessibility, or by pasting. The app's Undo reverts it."""
     focused = _get(AXUIElementCreateApplication(pid), "AXFocusedUIElement")
     before = str(_get(focused, "AXValue") or "") if focused is not None else ""
     if focused is not None and before and AXUIElementSetAttributeValue(focused, "AXSelectedText", text) == 0:
@@ -137,15 +128,13 @@ def replace_selection(pid: int, text: str) -> str:
     board.clearContents()
     board.setString_forType_(text, NSPasteboardTypeString)
     _command(KEY_V)
-    time.sleep(0.6)  # (let the app take the paste before the clipboard goes back)
+    time.sleep(0.6)
     _restore(saved)
     return "paste"
 
 
 def insert_after_selection(pid: int, text: str) -> str:
-    """Put `text` on its own lines under the selection, leaving the selected
-    text as it is. (The right arrow moves the cursor to the end of a selection
-    in any Mac or web text box.)"""
+    """Insert `text` below the selection, leaving it unchanged."""
     _command(KEY_RIGHT, 0)
     time.sleep(0.1)
     return replace_selection(pid, text)
@@ -156,9 +145,7 @@ WINDOW_TEXT_CHARS = 1500
 
 
 def window_text(pid: int) -> str:
-    """The start of the document in the app's main window, e.g. behind its Save
-    window, so Dock can suggest a folder from what it's about. The saved file
-    if it has one, else the window's biggest text area (TextEdit, Mail, Notes...)."""
+    """Start of the document behind a Save dialog (the saved file, else the largest text area)."""
     app = AXUIElementCreateApplication(pid)
     window = _get(app, "AXMainWindow") or _get(app, "AXFocusedWindow")
     if window is None:

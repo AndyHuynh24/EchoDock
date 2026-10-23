@@ -1,11 +1,5 @@
-"""Saved workspaces: "remember this workspace as Study", then later "open my
-Study workspace".
-
-Saving records, for every app with a window on the current desktop (macOS only
-shows us windows on the desktop/Space you are looking at): the app, the documents
-its windows show (when the app reports them), Chrome/Safari tabs, Finder
-folders, and where each window is. Opening reopens all of that and moves the
-windows back. Workspaces are saved on this Mac in ~/.dock/workspaces/.
+"""Saved workspaces on macOS: apps, documents, browser tabs, Finder folders and window
+positions on the current Space. Stored in ~/.dock/workspaces/.
 """
 
 import json
@@ -28,9 +22,9 @@ from ApplicationServices import (
 from Quartz import CGPoint, CGSize
 
 from dock_agent.menus import _get, _rect
-from dock_agent.workspaces_common import WORKSPACE_DIR, WorkspaceError, _load, _norm, bare, list_all  # noqa: F401 (actions.py uses list_all)
+from dock_agent.workspaces_common import WORKSPACE_DIR, WorkspaceError, _load, _norm, bare, list_all  # noqa: F401
 
-SETTLE_SECONDS = 2.5  # time for reopened apps to show their windows
+SETTLE_SECONDS = 2.5
 
 TABS_SCRIPTS = {
     "Google Chrome": 'tell application "Google Chrome" to get URL of tabs of windows',
@@ -47,13 +41,10 @@ tell application "Finder"
     return found
 end tell
 """
-# (Inside "tell Finder", "folders" is Finder's own word, so it can't name a
-# list; and the folders are read all at once, which works on recent macOS.)
 
 
 def _applescript_strings(script: str) -> list[str]:
-    """Run AppleScript and return the strings in its answer. The first time,
-    macOS asks whether Terminal may control that app."""
+    """Run AppleScript and return the strings in its result."""
     try:
         output = subprocess.run(["osascript", "-s", "s", "-e", script], capture_output=True, text=True, timeout=8).stdout
     except subprocess.TimeoutExpired:
@@ -106,8 +97,7 @@ def save(name: str) -> dict:
 
 
 def _folders_from_titles(windows: list[dict]) -> list[str]:
-    """For workspaces saved without Finder's folders: a Finder window's title
-    is its folder's name ("huynhhuy" is the home folder, "Downloads"...)."""
+    """Older workspaces: a Finder window's title is its folder name."""
     home = Path.home()
     folders = []
     for window in windows:
@@ -131,7 +121,7 @@ def _reopen(app: dict) -> None:
         if not folders:
             subprocess.run(["open", "-a", "Finder"])
     elif app.get("urls"):
-        # Skip tabs that are already open, so reopening doesn't duplicate them.
+        # Don't reopen tabs that are already open.
         is_running = any(a.localizedName() == app["app"] for a in NSWorkspace.sharedWorkspace().runningApplications())
         already_open = set(_applescript_strings(TABS_SCRIPTS[app["app"]])) if is_running else set()
         missing = [url for url in app["urls"] if url not in already_open]
@@ -148,7 +138,7 @@ def _move_windows(app: dict) -> None:
     current = list(_get(AXUIElementCreateApplication(running[0].processIdentifier()), "AXWindows") or [])
 
     def pick(saved):
-        # Same document first, then same title, then whatever window is left.
+        # Match by document, then title, then any remaining window.
         for test in (
             lambda w: saved["document"] and _windows_document(w) == saved["document"],
             lambda w: saved["title"] and str(_get(w, "AXTitle") or "") == saved["title"],

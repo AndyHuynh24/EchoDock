@@ -1,18 +1,9 @@
-"""Starts the Dock server: one web app that serves
+"""Dock server entry point.
 
-- /mcp        the MCP endpoint (Streamable HTTP) that Alexa+ or the simulated
-              Alexa+ voice mode calls
-- /api/voice  simulated Alexa+: the phone sends what the user said
-- /ws/agent   WebSocket for the desktop agent on the laptop
-- /ws/phone   WebSocket for the phone web app
-- /setup      the setup page with a QR code for the phone (only on the Mac itself)
-- /           the phone web app itself (files in server/static)
+Serves the MCP endpoint (/mcp, Streamable HTTP), the voice API (/api/voice),
+WebSockets for the desktop agent and phones, the setup page and the phone web app.
 
-/mcp and /api need "Authorization: Bearer <DOCK_TOKEN>". The WebSockets take
-?token=<DOCK_TOKEN>. The installed phone app lives at its own fixed address
-(see webapp.py) and may call /api from there.
-
-Run it from the server folder:  uv run python -m dock_server.main
+Run from the server folder:  uv run python -m dock_server.main
 """
 
 import asyncio
@@ -32,10 +23,11 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
-from dock_server import setup_page, tunnel, voice, webapp
+from dock_server import setup_page, tracing, tunnel, voice, webapp
 from dock_server.downloads import NewDownloads
 from dock_server.briefing import Briefing
-from dock_server.mail import Mail
+from dock_server.library import Library
+from dock_server.mail import DEMO as mail_demo, Mail
 from dock_server.focus import FocusMode
 from dock_server.hub import AgentError, AgentOffline, Hub
 from dock_server.calendar_link import Calendar
@@ -47,12 +39,12 @@ from dock_server.timefmt import strftime
 from dock_server.tools import app_help, computer, focus, reading, recap, tidy, workspaces, writing
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
-# Phone taps that ask Dock to do something (not status updates like presence).
+# Phone messages that run an action
 FOLDER_NAMES_SECONDS = 600
 OPEN_APPS_SECONDS = 20
 WORKSPACES_SECONDS = 60
-APP_NAMES = {"Code": "VS Code (Code)"}  # macOS names some apps differently from how people say them
-# Speech-to-text gets names and numbers wrong in the same ways again and again.
+APP_NAMES = {"Code": "VS Code (Code)"}
+# Common speech-to-text mistakes.
 HEARING_HELP = (
     " Important: the user's words come from speech-to-text, which often mishears names and "
     "numbers. Before you pick a tool, fix them to the closest real folder, app or workspace "
@@ -64,7 +56,7 @@ STATIC_PAGE_FILES = ("index.html", "app.js", "style.css", "focus.js")
 
 
 def page_version() -> str:
-    """Changes whenever the phone page's files change."""
+    """Changes whenever the static files change."""
     import hashlib
     digest = hashlib.sha1()
     for name in STATIC_PAGE_FILES:
@@ -84,7 +76,7 @@ AWS_LOGIN_EXPIRED = "My AI login has expired. On the {computer}, open {terminal}
 
 
 def _aws_login_problem(error: BaseException) -> bool:
-    """True if the AI failed because the AWS login expired or is missing."""
+    """True if Bedrock failed because the AWS login expired or is missing."""
     while error is not None:
         name = type(error).__name__
         if name in ("LoginRefreshRequired", "NoCredentialsError", "TokenRetrievalError", "UnauthorizedSSOTokenError") \
@@ -111,9 +103,7 @@ class TokenAuth:
 
 
 class AllowPhoneApp:
-    """Lets the installed phone app (at its fixed web address, see webapp.py)
-    call /api on this server. Browsers block that unless the server says the
-    app's address is allowed (CORS). The bearer token is still required."""
+    """Allow the hosted phone app to call /api (CORS). The token is still required."""
 
     def __init__(self, app):
         self.app = app
@@ -124,7 +114,7 @@ class AllowPhoneApp:
             await self.app(scope, receive, send)
             return
         allow = [(b"access-control-allow-origin", given.encode()), (b"vary", b"Origin")]
-        if scope["method"] == "OPTIONS":  # the browser asks first
+        if scope["method"] == "OPTIONS":
             await send({"type": "http.response.start", "status": 204, "headers": allow + [
                 (b"access-control-allow-methods", b"GET, POST"),
                 (b"access-control-allow-headers", b"authorization, content-type"),
@@ -156,10 +146,12 @@ def create_app(token: str, port: int):
     notes = Notes(hub)
     notes.register(mcp)
     calendar = Calendar(hub, notes)
-    notes.calendar = calendar  # (to-dos with a time go on the calendar)
+    notes.calendar = calendar
     calendar.register(mcp)
     mail = Mail(hub, focus_mode, notes, calendar)
     mail.register(mcp)
+    library = Library(hub, mail, notes, calendar)
+    library.register(mcp)
     briefing = Briefing(hub, calendar, mail, notes, focus_mode)
     briefing.register(mcp)
     focus.register(mcp, focus_mode, notes, calendar, mail)
@@ -169,13 +161,13 @@ def create_app(token: str, port: int):
     pad.downloads = new_downloads
 
     async def on_agent_event(event: dict) -> None:
-        if event["event"] == "hello":  # the agent says which computer it's on
+        if event["event"] == "hello":
             hub.platform = str(event.get("platform") or "mac")
             hub.talk_key = str(event.get("talk_key") or hub.talk_key)
             await hub.push_phone("platform", platform=hub.platform, talk_key=hub.talk_key)
         elif event["event"] == "front_app":
             await pad.front_app_changed(event)
-            await briefing.on_activity()  # (the user is at the computer: maybe the morning briefing)
+            await briefing.on_activity()
         elif event["event"] == "new_download":
             await new_downloads.on_new(event)
         elif event["event"] == "save_panel":
@@ -190,7 +182,6 @@ def create_app(token: str, port: int):
     async def on_phone_message(message: dict) -> None:
         kind = message.get("kind")
         if kind in ("open_mac_chat", "close_mac_chat"):
-            # The phone is the trigger: the chat box opens on the Mac, for the Mac's keyboard.
             try:
                 await hub.ask_agent("chat_box", open=kind == "open_mac_chat")
                 if kind == "open_mac_chat":
@@ -199,16 +190,23 @@ def create_app(token: str, port: int):
                 await hub.push_phone("mac_chat", ok=False)
             return
         if kind == "mac_typing":
-            await hub.push_phone("stop_listening")  # typing on the Mac: the phone stops listening
+            await hub.push_phone("stop_listening")
+            return
+        if kind == "listening":
+            await hub.push_phone("listening", on=bool(message.get("on")), **{"from": message.get("from")})
             return
         if kind == "speech_done":
-            await hub.push_phone("speech_done", **{"from": message.get("from")})  # one screen finished saying it: the others' card goes too
+            await hub.push_phone("speech_done", **{"from": message.get("from")})
+            return
+        if kind == "close_card":
+            # Close a card on every screen.
+            await hub.push_phone("close_card", id=str(message.get("id", ""))[:40])
             return
         if kind == "screen_info":
             print("Phone screen: " + " ".join(f"{k}={message.get(k)}" for k in ("mode", "fullscreen", "view", "screen", "insets", "angle")))
             return
         if kind in DOCK_REQUESTS:
-            # The user asked Dock for something else, so drop "Want Dock to suggest a folder?"
+            # A new request replaces the pending folder suggestion.
             await new_downloads.skip_save_ask("asked Dock for something else")
         if kind == "press":
             await pad.press(message)
@@ -228,7 +226,7 @@ def create_app(token: str, port: int):
                       "start_break", "week_report"):
             await focus_mode.from_phone(message)
 
-    # Phones that stay open get told when the page changes too (checked every few seconds).
+    # Tell open phones when the page changes.
     version_watch = []
 
     async def tell_new_version() -> None:
@@ -236,24 +234,31 @@ def create_app(token: str, port: int):
         while True:
             await asyncio.sleep(5)
             if page_version() != current:
-                # (Wait for the installed app's online copy to be updated first, see webapp.py.)
                 await asyncio.sleep(15)
                 current = page_version()
                 await hub.push_phone("version", id=current)
 
     async def on_phone_connect(ws) -> None:
-        # Which version of the page is current: an open phone page reloads itself
-        # when Dock was updated, instead of running its old copy.
         await ws.send_json({"kind": "version", "id": page_version()})
-        await ws.send_json({"kind": "platform", "platform": hub.platform, "talk_key": hub.talk_key})
+        await ws.send_json({"kind": "platform", "platform": hub.platform, "talk_key": hub.talk_key,
+                            "demo": mail_demo})
         if not version_watch:
             version_watch.append(asyncio.get_running_loop().create_task(tell_new_version()))
         calendar.ensure_watch()
         mail.ensure_watch()
         notes.ensure_watch()
+        library.ensure_watch()
         await briefing.on_activity()
         await pad.phone_connected(ws)
         await focus_mode.phone_connected(ws)
+        asyncio.get_running_loop().create_task(send_workspaces(ws))
+
+    async def send_workspaces(ws) -> None:
+        """Saved workspace names, for the face's suggestions."""
+        try:
+            await ws.send_json({"kind": "workspaces", "names": await known_names("workspaces", "list_workspaces", WORKSPACES_SECONDS)})
+        except Exception:
+            pass
         await savings.push(ws)
         await new_downloads.phone_connected(ws)
 
@@ -263,8 +268,7 @@ def create_app(token: str, port: int):
 
     mcp_url = f"http://127.0.0.1:{port}/mcp"
 
-    # The user's own folder names, so the AI can fix speech mistakes ("Start 310"
-    # is their stat310 folder). Asked from the Mac at most every 10 minutes.
+    # Folder names help correct speech mistakes. Refreshed at most every 10 minutes.
     folder_names = {"at": 0.0, "names": []}
 
     async def known_folders() -> list[str]:
@@ -276,8 +280,7 @@ def create_app(token: str, port: int):
                 pass
         return folder_names["names"]
 
-    # The same for open apps and saved workspaces ("fighter" is Finder, "start
-    # 3:10" is the stat310 workspace). These change more often, so asked more often.
+    # Same for open apps and saved workspaces.
     known = {"apps": (0.0, []), "workspaces": (0.0, [])}
 
     async def known_names(kind: str, action: str, seconds: float) -> list[str]:
@@ -290,13 +293,25 @@ def create_app(token: str, port: int):
                 pass
         return names
 
+    async def heard_endpoint(request: Request) -> JSONResponse:
+        """Test remote (static/remote.html): use the tapped phrase as the transcript."""
+        text = str((await request.json()).get("text", "")).strip()[:300]
+        if text:
+            print(f"Remote: {text!r}")
+            await hub.push_phone("heard", text=text)
+        return JSONResponse({"ok": bool(text)})
+
+    async def skip_timer_endpoint(request: Request) -> JSONResponse:
+        """Test remote: end the focus session in 3 seconds."""
+        return JSONResponse({"ok": await focus_mode.skip_to_end(3)})
+
     async def voice_endpoint(request: Request) -> JSONResponse:
         body = await request.json()
         text = body.get("text", "").strip()
         if not text:
             return JSONResponse({"reply": "I didn't catch that.", "quiet": False})
         print(f"Voice: {text!r}")
-        # Every screen shows the same thing: the others show this request and its answer too.
+        # Mirror the request and answer on every screen.
         screen = {"from": body.get("screen", "")}
         await hub.push_phone("asking", text=text, **screen)
         hub.talked = True
@@ -307,8 +322,6 @@ def create_app(token: str, port: int):
                 context += (" The computer is a Windows PC: where these instructions say Mac, they mean this PC "
                             "(File Explorer is its Finder, Ctrl is its Command key).")
             try:
-                # So "where's Programmer?" is a feature of this app, and "how do I check my
-                # costs?" on the AWS console in Safari is about that page.
                 front = await hub.ask_agent("front_window", timeout=1.5)
                 context += f" The app in front on the Mac is {front['app']}"
                 context += f", and its window is \"{front['title'][:100]}\"." if front.get("title") else "."
@@ -318,6 +331,7 @@ def create_app(token: str, port: int):
             context += new_downloads.voice_context()
             context += mail.voice_context()
             context += writing.voice_context()
+            context += library.voice_context()
             try:
                 selected = await hub.ask_agent("selection_size", timeout=1.5)
                 if selected["chars"]:
@@ -338,7 +352,6 @@ def create_app(token: str, port: int):
                 context += f" Saved workspaces: {', '.join(spaces)}."
             context += HEARING_HELP
             reply, quiet = await voice.answer(text, mcp_url, token, context=context)
-            # Unless that answered it (by calling suggest_folders), the question is now stale.
             await new_downloads.skip_save_ask("asked Dock for something else")
         except Exception as e:
             traceback.print_exc()
@@ -349,17 +362,17 @@ def create_app(token: str, port: int):
         await hub.push_phone("answered", text=text, reply=reply, quiet=quiet, spoken=bool(body.get("spoken")), **screen)
         return JSONResponse({"reply": reply, "quiet": quiet})
 
-    # Remote MCP clients (Alexa+) reach /mcp through the public address, whose name the
-    # SDK's localhost-only Host check would refuse. /mcp needs the secret token anyway,
-    # which is what keeps other web pages and people out.
+    # Remote MCP clients use the public hostname; /mcp is protected by the token instead of the Host check.
     app = mcp.streamable_http_app(stateless_http=True, json_response=True,
                                   transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
     app.router.routes.append(Route("/api/voice", voice_endpoint, methods=["POST"]))
+    app.router.routes.append(Route("/api/heard", heard_endpoint, methods=["POST"]))
+    app.router.routes.append(Route("/api/skip_timer", skip_timer_endpoint, methods=["POST"]))
     app.router.routes.append(WebSocketRoute("/ws/agent", hub.agent_endpoint))
     app.router.routes.append(WebSocketRoute("/ws/phone", hub.phone_endpoint))
     app.router.routes.extend(setup_page.routes(hub, token, STATIC_DIR, calendar, new_downloads, mail, briefing))
     app.router.routes.append(Mount("/", StaticFiles(directory=STATIC_DIR, html=True)))
-    return AllowPhoneApp(TokenAuth(app, token))
+    return AllowPhoneApp(TokenAuth(tracing.TraceRequests(app), token))
 
 
 def main() -> None:
@@ -370,7 +383,8 @@ def main() -> None:
     tunnel.start(port)
     webapp.start(STATIC_DIR)
     print(f"Dock server on http://localhost:{port}. Setup page: http://localhost:{port}/setup")
-    uvicorn.run(create_app(token, port), host="127.0.0.1", port=port)
+    # Use DOCK_HOST=0.0.0.0 in a container.
+    uvicorn.run(create_app(token, port), host=os.environ.get("DOCK_HOST", "127.0.0.1"), port=port)
 
 
 if __name__ == "__main__":

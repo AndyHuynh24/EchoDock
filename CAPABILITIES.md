@@ -1,6 +1,6 @@
 # What Dock Can Do
 
-*Updated Oct 17, 2026.* ✅ = works today on Andy's Mac with the phone web app. *Tested* = run end to end on the current models (Claude Haiku 4.5 picks the tool; Nova 2 Lite does small jobs). 💲 = uses AI (about $0.001). **Free** = no AI.
+*Updated Oct 17, 2026.* ✅ = works on macOS with the phone web app. *Tested* = run end to end on the current models (Claude Haiku 4.5 picks the tool; Nova 2 Lite does small jobs). 💲 = uses AI (about $0.001). **Free** = no AI.
 
 You talk to Dock by **tapping to talk** or **typing** on the docked phone (or, once Amazon grants access, through Alexa+ on the Echo Pop). Dock remembers the last few exchanges, so follow-ups like "do it" or "open the newest one" work.
 
@@ -225,7 +225,8 @@ Sessions are logged in `server/.data/focus_log.json`. Window titles are checked 
 | Everything else (pad taps, opening, workspaces, moves, arrow, reading aloud, speech in Chrome, speech to text on the Mac with Whisper, the Mac's voice, server, tunnel) | none | Free |
 
 - About **$0.10 per 100 requests**. Speed: 0.6–1.5 s for most requests, 2–4.5 s for multi-step ones, about 10 s for a tidy plan.
-- Compared (routing test, 108 phrases, Oct 17): Haiku 4.5 with caching 108/108, median 0.82 s, ~$0.0016 per request; Nova 2 Lite 106/108 (it guessed on vague requests instead of asking), 0.69 s, ~$0.002. Nova Lite was cheapest but made things up, so it's not used.
+- Search eval (`server/evals/rag.py`, synthetic corpus of 18 files/emails/notes/events, 25 questions incl. 3 with no answer): 22/22 correct with the right source cited, 3/3 "not found", hybrid hit@1 95% / hit@5 100% / MRR 0.96, ~1 s per question. Indexing a real Mac (392 documents, 400 emails, 50 events): ~6 min, ~500K tokens, about $0.01 with Titan v2.
+- Eval suite (`server/evals/routing.py`, 130 phrases incl. 8 safety cases, Oct 18): Haiku 4.5 130/130, median 0.89 s, p95 1.35 s, ~$0.0018 per request, 91% of prompt tokens cached. Earlier comparison (108 phrases, Oct 17): Haiku 4.5 with caching 108/108, median 0.82 s, ~$0.0016 per request; Nova 2 Lite 106/108 (it guessed on vague requests instead of asking), 0.69 s, ~$0.002. Nova Lite was cheapest but made things up, so it's not used.
 - Change models with `DOCK_ROUTER_MODEL` / `DOCK_MODEL` / `DOCK_SMART_MODEL`. Prices come from third-party lists.
 
 ## Computer resources *(measured on an M1 Pro MacBook, 16 GB)*
@@ -242,7 +243,7 @@ Sessions are logged in `server/.data/focus_log.json`. Window titles are checked 
 - The phone page is a normal Chrome tab. Speech recognition runs in Chrome.
 
 ## Under the hood (for judges)
-- **MCP server:** Python MCP SDK 2.3.0, Streamable HTTP, protocol **2025-11-25**, bearer-token auth, 28 tools: `open_folder`, `find_files`, `open_file`, `open_app`, `arrange_windows`, `workspace`, `app_help`, `do_app_action`, `suggest_folders`, `put_in_folder`, `undo_last_action`, `set_folder_suggestions`, `read`, `get_recap`, `notes`, `get_schedule`, `get_ready`, `check_email`, `clean_up_email`, `add_email_todo`, `unsubscribe_email`, `get_briefing`, `improve_writing`, `apply_writing`, `search_web`, `start_focus_session`, `control_focus`, `focus_status` (voice macros removed Oct 17; 97 of 97 test phrases pick the right tool)
+- **MCP server:** Python MCP SDK 2.3.0, Streamable HTTP, protocol **2025-11-25**, bearer-token auth, 30 tools: `search_my_stuff`, `open_folder`, `find_files`, `open_file`, `open_app`, `arrange_windows`, `close_windows`, `workspace`, `app_help`, `do_app_action`, `suggest_folders`, `put_in_folder`, `undo_last_action`, `set_folder_suggestions`, `read`, `get_recap`, `notes`, `get_schedule`, `get_ready`, `check_email`, `clean_up_email`, `add_email_todo`, `unsubscribe_email`, `get_briefing`, `improve_writing`, `apply_writing`, `search_web`, `start_focus_session`, `control_focus`, `focus_status` (voice macros removed Oct 17; 130 of 130 test phrases pick the right tool, Oct 18)
 - **Simulated Alexa+:** phone → Bedrock picks tools → calls the MCP server over Streamable HTTP, exactly as Alexa+ would.
 - **Desktop agent:** Python + macOS Accessibility (menus, pointing, clicking, windows, selected text) + Spotlight. It connects out to the server, so it works on campus Wi-Fi.
 

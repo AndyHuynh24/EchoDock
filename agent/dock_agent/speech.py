@@ -1,30 +1,7 @@
-"""Speech to text, while the talk key is held (see hotkey.py).
+"""Local speech-to-text with faster-whisper.
 
-The microphone records only between start() and stop(). Then Whisper (via
-faster-whisper) turns the recording into text right on this computer: free
-and private. It uses the "small.en" model (about 480 MB, downloaded once;
-under 1 s per request on an M1 Mac). If a computer is too slow for it (more
-than SLOW_SECONDS for a request), Dock switches to the lighter "base.en"
-(about 140 MB, about 0.3 s), which hears a little less well. Computers with
-SMALL_RAM_GB of memory or less use base.en from the start.
-
-Memory: the model takes about 290 MB (small.en) while loaded, so it's only
-kept while it's being used. It loads the moment the talk key goes down (about
-0.8 s, done while the user is still talking) and is freed after
-IDLE_UNLOAD_SECONDS without speech. When Dock starts, it only makes sure the
-model is downloaded.
-
-Tested on 56 clips in 7 English accents (US, UK, Indian, Australian, Irish,
-South African): small.en got 47 right through the whole chain (speech, then
-the AI picking the action), base.en 45. Amazon Transcribe heard far less, and
-Voxtral on Bedrock sometimes made up names, so neither is used. Short hints
-(the user's class folders) help; long ones make Whisper write lists of names.
-
-(Apple's own speech recognition was tried first, but it only works when the
-user has turned on Siri or Dictation in System Settings.)
-
-Recording (sounddevice) and Whisper work the same on Windows; only the
-microphone permission check below is Mac-specific (docs/WINDOWS-PORT.md).
+Uses small.en, or base.en on slower or low-memory machines. The model loads when
+listening starts and is unloaded after IDLE_UNLOAD_SECONDS.
 """
 
 import os
@@ -35,9 +12,9 @@ import time
 import numpy as np
 import sounddevice
 
-RATE = 16000          # Whisper wants 16 kHz mono
+RATE = 16000
 LIGHT_MODEL = "base.en"
-SMALL_RAM_GB = 8      # this much memory or less: start with the light model
+SMALL_RAM_GB = 8  # RAM at or below this starts with base.en
 IDLE_UNLOAD_SECONDS = 600
 
 
@@ -45,18 +22,18 @@ def _memory_gb() -> float:
     try:
         return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2**30
     except (ValueError, OSError, AttributeError):
-        return 16.0  # (unknown, e.g. on Windows: assume enough)
+        return 16.0
 
 
 MODEL = os.environ.get("DOCK_SPEECH_MODEL") or ("small.en" if _memory_gb() > SMALL_RAM_GB else LIGHT_MODEL)
-SLOW_SECONDS = 2.5    # slower than this on a request: switch to the light model
-MAX_PROMPT = 200      # longer hints make Whisper invent lists of names
-MIN_SECONDS = 0.3     # shorter than this is a slip of the finger
-QUIET = 0.004         # average loudness below this is silence
-SPEAKING = 0.02       # louder than this is someone talking
-PAUSE_SECONDS = 1.2   # (clicked to talk) this much quiet after talking means "done"
+SLOW_SECONDS = 2.5  # switch to base.en if slower than this
+MAX_PROMPT = 200  # longer hints make Whisper hallucinate lists
+MIN_SECONDS = 0.3
+QUIET = 0.004  # silence threshold
+SPEAKING = 0.02  # speech threshold
+PAUSE_SECONDS = 1.2  # silence after speech that ends a click-to-talk
 MAX_SECONDS = 20
-GIVE_UP_SECONDS = 6   # (clicked to talk) nobody said anything for this long
+GIVE_UP_SECONDS = 6
 
 _model = None
 _model_name = MODEL
@@ -77,7 +54,7 @@ def _whisper():
 
 
 def _unload_when_idle() -> None:
-    """Free the model's memory after IDLE_UNLOAD_SECONDS without speech."""
+    """Unload the model after IDLE_UNLOAD_SECONDS without speech."""
     global _model
     while True:
         time.sleep(60)
@@ -90,8 +67,7 @@ def _unload_when_idle() -> None:
 
 
 def prepare() -> None:
-    """At startup: make sure the model is downloaded (the first time it's ~480 MB),
-    without keeping it in memory, and start the idle check."""
+    """Download the model at startup without loading it, and start the idle check."""
     def download():
         try:
             from faster_whisper import download_model
@@ -104,7 +80,7 @@ def prepare() -> None:
 
 
 def _use_light_model() -> None:
-    """This computer is too slow for the default model: switch to the light one."""
+    """Fall back to the lighter model."""
     global _model, _model_name
     if _model_name != LIGHT_MODEL:
         print(f"Speech took too long with {_model_name}; switching to {LIGHT_MODEL}.")
@@ -113,16 +89,15 @@ def _use_light_model() -> None:
 
 
 def preload() -> None:
-    """Load the model in the background (if it isn't already), e.g. the moment
-    the talk key goes down, so it's ready by the time the user stops talking."""
+    """Load the model in the background if needed."""
     if _model is None:
         threading.Thread(target=_whisper, daemon=True).start()
 
 
 def permissions() -> dict:
-    """"allowed", "denied" or "ask" for the microphone."""
+    """Microphone permission: "allowed", "denied" or "ask"."""
     if sys.platform == "win32":
-        # Windows' privacy switch for desktop apps (Settings › Privacy & security › Microphone).
+        # Windows privacy setting for desktop apps.
         import winreg
         key = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
         for path in (key, key + r"\NonPackaged"):
@@ -141,7 +116,7 @@ def permissions() -> dict:
 
 
 def ask_permission() -> None:
-    """Show macOS's "allow the microphone" question (once), or Windows' microphone settings."""
+    """Ask for microphone access (or open Windows' settings)."""
     if sys.platform == "win32":
         import os
         os.startfile("ms-settings:privacy-microphone")
@@ -158,14 +133,11 @@ class Listener:
         self.hints: list[str] = []
 
     def start(self, hints: list[str] | None = None, on_pause=None) -> None:
-        """Start recording. hints are words to expect (e.g. the front app's menu
-        items), which helps Whisper spell them right. on_pause() is called once
-        when the user has talked and then gone quiet (or after MAX_SECONDS):
-        used when they clicked to talk instead of holding the key."""
-        preload()  # (loads while the user talks, if it was freed)
+        """Start recording. hints: words to expect. on_pause(): called once after speech then silence."""
+        preload()
         self.hints = hints or []
         self.chunks = []
-        heard = {"talking": False, "quiet": 0, "total": 0, "told": False}
+        heard = self.heard = {"talking": False, "quiet": 0, "total": 0, "told": False}
 
         def got_audio(data, frames, when, status):
             self.chunks.append(data.copy())
@@ -185,8 +157,12 @@ class Listener:
         self.stream = sounddevice.InputStream(samplerate=RATE, channels=1, dtype="float32", callback=got_audio)
         self.stream.start()
 
+    def talked(self) -> bool:
+        """Whether speech was heard since start()."""
+        return getattr(self, "heard", {}).get("talking", False)
+
     def cancel(self) -> None:
-        """Stop recording and throw it away."""
+        """Stop and discard the recording."""
         if self.stream is not None:
             self.stream.stop()
             self.stream.close()
@@ -194,7 +170,7 @@ class Listener:
         self.chunks = []
 
     def stop(self) -> str:
-        """Stop recording and return what was said ("" if nothing)."""
+        """Stop and return the transcript ("" if nothing)."""
         if self.stream is None:
             return ""
         self.stream.stop()

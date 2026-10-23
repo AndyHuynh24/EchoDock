@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1823">
+<title>Dock Remote</title>
+<!-- Test remote: tap a phrase to use it as the transcript on the screen that's listening.
+  Dock's answer is real; only the input is typed. Open with the phone link, using remote.html. -->
+<script src="config.js"></script>
+<style>
+  :root {
+    --bg: #0f1823; --card: #18243a; --line: rgba(255, 255, 255, 0.1);
+    --fg: #f3f7fa; --muted: #8fa1b3; --cyan: #00caff; --blue: #1e6bff; --orange: #ff9900;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; min-height: 100dvh; background: var(--bg); color: var(--fg);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+  h1 { font-size: 22px; margin: 0; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status.bad { color: var(--orange); }
+  .hint { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--cyan); margin: 20px 0 8px; }
+  .lines { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px; }
+  .lines button {
+    text-align: left; padding: 14px 16px; min-height: 54px; border-radius: 16px;
+    border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; font-weight: 600;
+    transition: transform 0.1s, border-color 0.2s, background 0.2s;
+  }
+  .lines button:active { transform: scale(0.97); }
+  .lines button.tool { border-color: rgba(255, 153, 0, 0.5); color: var(--orange); }
+  .lines button.sent { border-color: var(--cyan); background: rgba(0, 202, 255, 0.14); }
+  form { display: flex; gap: 8px; margin-top: 8px; }
+  input {
+    flex: 1; min-width: 0; padding: 13px 16px; border-radius: 999px; font: inherit;
+    border: 1px solid rgba(0, 202, 255, 0.4); background: rgba(0, 0, 0, 0.3); color: var(--fg);
+  }
+  form button {
+    padding: 0 20px; border: none; border-radius: 999px; font: inherit; font-weight: 700;
+    background: linear-gradient(135deg, #00caff, #1e6bff); color: white;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Dock Remote</h1>
+  <span id="status">Connecting…</span>
+</header>
+<p class="hint">First start Dock listening (tap the phone, or ⌥ Space on the computer). Then tap what you'd say.</p>
+
+<div id="groups"></div>
+
+<h2>Demo tools</h2>
+<div class="lines"><button type="button" id="skip-timer" class="tool">⏩ Focus timer to 3 seconds</button></div>
+
+<h2>Your own words</h2>
+<form id="own">
+  <input id="own-text" type="text" placeholder="Type what you'd say…" autocomplete="off" enterkeyhint="send">
+  <button type="submit">Say</button>
+</form>
+<div class="lines" id="recent" style="margin-top: 8px"></div>
+
+<script>
+// Preset phrases.
+const GROUPS = [
+  ["Morning", ["Good morning.", "What did Dr. Morgan say about the proposal?", "Open it."]],
+  ["Getting to work", ["Open my proposal workspace.", "Put Mail on the right.", "I deleted a paragraph yesterday. Can I recover it?", "Do it."]],
+  ["Focus and writing", ["Focus on the proposal for 50 minutes.", "Where should this go?", "Make this more professional.", "Use it."]],
+  ["And more", ["Open the PDF I just downloaded.", "Remind me to book a room at 5.", "Tidy up my downloads.", "Clean up my inbox.", "Close all windows on desktop please."]],
+  ["Night", ["Cross off the project proposal.", "What did I get done today?"]],
+];
+
+const $ = (id) => document.getElementById(id);
+function store(key, value) { try { localStorage.setItem(key, value); } catch {} }
+function stored(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
+
+// Pairing token from the link, then remembered.
+const fromLink = new URLSearchParams(location.hash.slice(1)).get("token");
+if (fromLink) { store("dock-token", fromLink); history.replaceState(null, "", location.pathname); }
+const token = fromLink || stored("dock-token");
+
+// Server address: this page's origin, or address.json for the hosted copy.
+let serverUrl = "";
+async function findServer() {
+  if (!window.DOCK_ADDRESS_URL) return location.origin;
+  const response = await fetch(`${window.DOCK_ADDRESS_URL}?t=${Date.now()}`, { cache: "no-store" });
+  return (await response.json()).url;
+}
+
+function setStatus(text, bad = false) { $("status").textContent = text; $("status").classList.toggle("bad", bad); }
+
+async function say(text, button) {
+  if (!token) { setStatus("Open this with the phone's pairing link", true); return; }
+  try {
+    serverUrl = serverUrl || await findServer();
+    const response = await fetch(`${serverUrl}/api/heard`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) throw new Error(response.status);
+    setStatus("Sent");
+    if (button) { button.classList.add("sent"); setTimeout(() => button.classList.remove("sent"), 1500); }
+  } catch {
+    serverUrl = "";  // look the address up again next time
+    setStatus("Can't reach Dock", true);
+  }
+}
+
+// End the running focus session in 3 seconds.
+$("skip-timer").addEventListener("click", async () => {
+  const button = $("skip-timer");
+  try {
+    serverUrl = serverUrl || await findServer();
+    const response = await fetch(`${serverUrl}/api/skip_timer`, {
+      method: "POST", headers: { "Authorization": `Bearer ${token}` },
+    });
+    const { ok } = await response.json();
+    setStatus(ok ? "Timer: 3 seconds left" : "No focus session running", !ok);
+    if (ok) { button.classList.add("sent"); setTimeout(() => button.classList.remove("sent"), 1500); }
+  } catch {
+    serverUrl = "";
+    setStatus("Can't reach Dock", true);
+  }
+});
+
+function lineButton(text) {
+  const button = Object.assign(document.createElement("button"), { type: "button", textContent: text });
+  button.addEventListener("click", () => say(text, button));
+  return button;
+}
+
+$("groups").replaceChildren(...GROUPS.flatMap(([title, lines]) => {
+  const list = Object.assign(document.createElement("div"), { className: "lines" });
+  list.append(...lines.map(lineButton));
+  return [Object.assign(document.createElement("h2"), { textContent: title }), list];
+}));
+
+// Recently typed phrases, newest first.
+function showRecent() {
+  let recent = [];
+  try { recent = JSON.parse(stored("dock-remote-recent") || "[]"); } catch {}
+  $("recent").replaceChildren(...recent.map(lineButton));
+}
+$("own").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = $("own-text").value.trim();
+  if (!text) return;
+  say(text);
+  let recent = [];
+  try { recent = JSON.parse(stored("dock-remote-recent") || "[]"); } catch {}
+  store("dock-remote-recent", JSON.stringify([text, ...recent.filter((t) => t !== text)].slice(0, 8)));
+  $("own-text").value = "";
+  showRecent();
+});
+showRecent();
+
+(async () => {
+  if (!token) { setStatus("Open this with the phone's pairing link", true); return; }
+  try { serverUrl = await findServer(); setStatus("Ready"); } catch { setStatus("Can't reach Dock", true); }
+})();
+</script>
+</body>
+</html>

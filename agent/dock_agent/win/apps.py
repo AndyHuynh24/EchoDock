@@ -1,10 +1,5 @@
-"""Open apps by a spoken name on Windows, e.g. "VS Code" -> Visual Studio Code
-(the same answers as dock_agent/apps.py on the Mac).
-
-The apps are the ones in the Start menu: Windows lists them all, desktop
-programs and Store apps alike, with `Get-StartApps` (asked once, in the
-background, and again every few minutes). Opening one goes through
-`shell:AppsFolder`, exactly as clicking it in the Start menu would.
+"""Open apps by spoken name on Windows, using the Start menu list (Get-StartApps)
+and shell:AppsFolder.
 """
 
 import difflib
@@ -19,7 +14,7 @@ from dock_agent.win import winapi
 REFRESH_SECONDS = 600
 CREATE_NO_WINDOW = 0x08000000
 
-# Short names people say -> the app's Start menu name (the first one installed wins).
+# Common short names -> Start menu name.
 ALIASES = {
     "vscode": ["Visual Studio Code"], "code": ["Visual Studio Code"],
     "chrome": ["Google Chrome"], "edge": ["Microsoft Edge"], "firefox": ["Firefox", "Mozilla Firefox"],
@@ -30,10 +25,10 @@ ALIASES = {
     "explorer": ["File Explorer"], "fileexplorer": ["File Explorer"], "finder": ["File Explorer"],
     "terminal": ["Terminal", "Windows PowerShell"], "powershell": ["Windows PowerShell", "PowerShell"],
     "calculator": ["Calculator"], "notepad": ["Notepad"], "paint": ["Paint"], "photos": ["Photos"],
-    "textedit": ["Notepad"], "preview": ["Photos"],  # (what Mac users call their nearest Windows apps)
+    "textedit": ["Notepad"], "preview": ["Photos"],
 }
 
-_apps: dict[str, str] = {}   # Start menu name -> app id
+_apps: dict[str, str] = {}
 _loaded_at = 0.0
 _lock = threading.Lock()
 
@@ -67,14 +62,14 @@ def _load() -> None:
 
 
 def prepare() -> None:
-    """Start listing the apps in the background, at startup."""
+    """List apps in the background at startup."""
     threading.Thread(target=_load, daemon=True).start()
 
 
 def installed_apps() -> dict[str, str]:
     if not _apps or time.time() - _loaded_at > REFRESH_SECONDS:
         if _apps:
-            prepare()  # (refresh in the background; the old list is fine meanwhile)
+            prepare()
         else:
             _load()
     with _lock:
@@ -109,15 +104,15 @@ def find_app(name: str) -> tuple[str, str] | None:
 
 
 def launch(app_id: str, *args: str) -> None:
-    """Open an app the way the Start menu does (with files or links to open, if given)."""
-    if args and re.match(r"^[A-Za-z]:\\", app_id):  # a desktop program: give it the files directly
+    """Launch an app like the Start menu does, optionally with files or links."""
+    if args and re.match(r"^[A-Za-z]:\\", app_id):
         subprocess.Popen([app_id, *args], creationflags=CREATE_NO_WINDOW)
         return
     subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{app_id}"])
 
 
 def open_app(name: str, exact: bool = False) -> dict:
-    """Open an app by a spoken name. exact=True only accepts an app with exactly that name."""
+    """Open an app by spoken name. exact=True accepts only an exact name."""
     found = find_app(name)
     if exact and found and _norm(found[0]) != _norm(name):
         found = None
@@ -128,7 +123,7 @@ def open_app(name: str, exact: bool = False) -> dict:
     return {"app": app}
 
 
-# ---- Apps that are open ----
+# ---- running apps ----
 
 def open_app_names() -> list[str]:
     names = {winapi.app_name(winapi.window_pid(hwnd), hwnd) for hwnd in winapi.app_windows()}
@@ -136,7 +131,7 @@ def open_app_names() -> list[str]:
 
 
 def open_windows_by_app() -> dict[str, list[int]]:
-    """App name -> its windows, front first."""
+    """App name -> windows, front first."""
     found: dict[str, list[int]] = {}
     for hwnd in winapi.app_windows():
         found.setdefault(winapi.app_name(winapi.window_pid(hwnd), hwnd), []).append(hwnd)
@@ -144,7 +139,7 @@ def open_windows_by_app() -> dict[str, list[int]]:
 
 
 def running_window(name: str) -> int:
-    """The front window of the open app with this (spoken) name, or 0."""
+    """Front window of the named app, or 0."""
     windows = open_windows_by_app()
     norm = {_norm(app): hwnds for app, hwnds in windows.items()}
     target = _norm(name)
@@ -159,7 +154,7 @@ def running_window(name: str) -> int:
 
 
 def bring_app_forward(name: str) -> dict:
-    """Bring an open app to the front (the name may be a bit off, e.g. "fighter" for File Explorer)."""
+    """Bring an open app to the front (fuzzy name match)."""
     hwnd = running_window(name)
     if not hwnd:
         raise AppNotFound(f"{name} isn't open.")

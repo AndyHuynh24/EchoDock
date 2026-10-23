@@ -1,10 +1,5 @@
-"""Watches which app is in front.
-
-- When the app in front changes, the server gets that app's menus, so the
-  phone can show a shortcut pad for it.
-- Every 30 seconds, if the user is active (touched the keyboard or mouse in
-  the last 2 minutes), the app in front gets 30 seconds of use. This feeds the
-  end-of-day recap. It is saved only on this Mac, in ~/.dock/activity/.
+"""Watches the front app: sends its menus when it changes (for the shortcut pad) and
+logs active time per app to ~/.dock/activity/ for the recap.
 """
 
 import json
@@ -36,7 +31,7 @@ class _AppWatcher(NSObject):
 
 
 def start() -> None:
-    """Start watching. Call on the main thread before the event loop runs."""
+    """Start watching. Main thread, before the event loop."""
     global _watcher
     _watcher = _AppWatcher.alloc().init()
     NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
@@ -46,7 +41,7 @@ def start() -> None:
 
 
 def announce_front_app() -> None:
-    """Tell the server which app is in front right now (e.g. after reconnecting)."""
+    """Report the current front app."""
     name, pid = menus.front_app()
     _announce_in_background(name, pid)
 
@@ -58,7 +53,7 @@ def _announce_in_background(name: str, pid: int) -> None:
 
 
 def _announce(name: str, pid: int) -> None:
-    # An app that is still launching has no menus yet, so wait a little for them.
+    # Launching apps have no menus yet.
     items = []
     for _ in range(12):
         try:

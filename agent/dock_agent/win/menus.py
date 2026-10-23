@@ -1,18 +1,8 @@
-"""Read and press the menu items of the app in front, on Windows (the same
-answers as dock_agent/menus.py on the Mac).
+"""Read and press menu items of the front app on Windows.
 
-Two kinds of menus:
-- Classic menus (Notepad++, Paint.NET, RStudio, many older apps): Windows
-  can list the whole menu without opening it, with each item's shortcut (the
-  text after a tab: "Save\tCtrl+S"). Pressing one sends the app the same
-  command a click would (WM_COMMAND).
-- Newer menus (the new Notepad, File Explorer, VS Code, Office): only UI
-  Automation sees them, and only while each menu is open. So Dock opens each
-  one for a moment to read it (only when asked something, never just because
-  you switched apps), and closes it again.
-
-Apps with no menu bar (Chrome, Edge, most Store apps) have their buttons
-listed by onscreen.py instead, like toolbar buttons on the Mac.
+Classic Win32 menus are read directly (WM_COMMAND to press). Newer menus are only
+visible to UI Automation while open, so they're opened briefly when needed. Apps
+without a menu bar are handled by onscreen.py.
 """
 
 import ctypes
@@ -28,7 +18,7 @@ import win32gui
 from dock_agent.win import uia, winapi
 
 CACHE_SECONDS = 300
-MENU_TIMEOUT = 1.0     # seconds to wait for an opened menu to show its items
+MENU_TIMEOUT = 1.0
 SKIP_MENUS = {"system", "system menu bar", "minimize", "maximize", "close", "restore"}
 
 user32 = ctypes.windll.user32
@@ -50,12 +40,12 @@ NO_ID = 0xFFFFFFFF
 WM_INITMENUPOPUP = 0x0117
 
 _cache: dict[int, tuple[float, list[dict]]] = {}
-_how: dict[tuple[int, tuple], dict] = {}   # (pid, path) -> {"kind": "classic", "hwnd", "id"} or {"kind": "uia"}
-_last_other = None                          # the last app in front that wasn't Dock itself
+_how: dict[tuple[int, tuple], dict] = {}  # (pid, path) -> {"kind": "classic", "hwnd", "id"} or {"kind": "uia"}
+_last_other = None
 
 
 class PermissionMissing(Exception):
-    """(Never raised on Windows: UI Automation needs no permission.)"""
+    """Never raised: UI Automation needs no permission."""
 
 
 class MenuItemDisabled(Exception):
@@ -66,7 +56,7 @@ def check_permission(prompt: bool = False) -> bool:
     return True
 
 
-# ---- Shortcuts as Windows shows them ("Ctrl+Shift+S") and as words ----
+# ---- shortcuts ----
 
 SPOKEN_KEYS = {"ctrl": "Control", "alt": "Alt", "shift": "Shift", "win": "Windows", "del": "Delete",
                "ins": "Insert", "esc": "Escape", "pgup": "Page Up", "pgdn": "Page Down", "bksp": "Backspace",
@@ -75,7 +65,6 @@ SPOKEN_KEYS = {"ctrl": "Control", "alt": "Alt", "shift": "Shift", "win": "Window
 
 
 def spoken(shortcut: str) -> str:
-    """ "Ctrl+Shift+S" -> "Control Shift S"."""
     if not shortcut:
         return ""
     parts = [p for p in re.split(r"\+(?=.)", shortcut.strip()) if p]
@@ -83,17 +72,15 @@ def spoken(shortcut: str) -> str:
 
 
 def _split_label(text: str) -> tuple[str, str]:
-    """ "&Save\tCtrl+S" -> ("Save", "Ctrl+S")."""
     title, _, shortcut = text.partition("\t")
     title = re.sub(r"&(.)", r"\1", title).strip()
     return title, shortcut.strip()
 
 
-# ---- The app in front ----
+# ---- front app ----
 
 def front_app() -> tuple[str, int]:
-    """The app the user is working in. If Dock's own window is in front (its
-    chat box or welcome window), that's the app they were using just before."""
+    """The user's app (the previous one if Dock itself is in front)."""
     global _last_other
     hwnd = winapi.foreground()
     pid = winapi.window_pid(hwnd) if hwnd else 0
@@ -107,13 +94,13 @@ def front_app() -> tuple[str, int]:
 
 
 def front_window(pid: int) -> tuple[str, str]:
-    """Title and (if Windows knows it) the file shown by the app's window."""
+    """Title and file of the app's window, if known."""
     hwnd = winapi.window_of(pid)
     window_title = winapi.title(hwnd) if hwnd else ""
     return window_title, winapi.document_in_title(window_title) if window_title else ""
 
 
-# ---- Classic menus ----
+# ---- classic menus ----
 
 def _menu_text(menu, position: int) -> str:
     buffer = ctypes.create_unicode_buffer(256)
@@ -122,7 +109,7 @@ def _menu_text(menu, position: int) -> str:
 
 
 def _prepare(hwnd: int, menu, position: int) -> None:
-    """Tell the app its menu is about to open, so it fills in and greys out items as it would."""
+    """Send WM_INITMENUPOPUP so the app updates its items."""
     result = wintypes.DWORD()
     user32.SendMessageTimeoutW(hwnd, WM_INITMENUPOPUP, menu, position, 0x2, 200, ctypes.byref(result))
 
@@ -134,7 +121,7 @@ def _walk_classic(hwnd: int, menu, path: list[str], items: list[dict], depth: in
             continue
         title, shortcut = _split_label(_menu_text(menu, position))
         if not title:
-            continue  # (drawn by the app itself: no text to read)
+            continue  # owner-drawn, no text
         submenu = user32.GetSubMenu(menu, position)
         if submenu:
             if depth < 3:
@@ -160,10 +147,10 @@ def _classic(hwnd: int) -> list[dict]:
     return items
 
 
-# ---- Newer menus (UI Automation) ----
+# ---- UI Automation menus ----
 
 def _menu_bar(window):
-    """The app's own menu bar (not the title bar's system menu)."""
+    """The app's menu bar (not the system menu)."""
     for found in uia.find_all(window, max_seconds=1.0):
         if found.type == auto.ControlType.MenuBarControl and found.name.lower() not in SKIP_MENUS:
             control = found.control()
@@ -175,9 +162,7 @@ def _menu_bar(window):
 
 
 def _open_menu_items(opened_from=None) -> list:
-    """The items of the menu that just opened. Classic menus open as their own
-    window on the desktop; newer ones under the item that opened them or
-    inside the app's window (a "popup"), so look in all three places."""
+    """Items of the menu that just opened (top-level popup, under the item, or inside the window)."""
     end = time.time() + MENU_TIMEOUT
     top = None
     try:
@@ -224,7 +209,7 @@ def _expand(item) -> bool:
 
 
 def _collapse_all() -> None:
-    """Close any open menus (Escape closes one level at a time)."""
+    """Close open menus."""
     for _ in range(3):
         try:
             open_menus = [c for c in auto.GetRootControl().GetChildren() if c.ControlType == auto.ControlType.MenuControl]
@@ -277,7 +262,7 @@ def _uia(hwnd: int) -> list[dict]:
                         inner_info = _item_info(inner, info["path"])
                         if inner_info:
                             items.append(inner_info)
-                    winapi.keys(win32con.VK_ESCAPE)  # (back to the first menu)
+                    winapi.keys(win32con.VK_ESCAPE)
                     time.sleep(0.05)
                 else:
                     items.append(info)
@@ -287,12 +272,10 @@ def _uia(hwnd: int) -> list[dict]:
     return items
 
 
-# ---- Reading, pressing and pointing ----
+# ---- read, press, point ----
 
 def read_menus(pid: int, use_cache: bool = True, open_menus: bool = True) -> list[dict]:
-    """Every menu item of the app, e.g. {"path": ["File", "Save"], "shortcut": "Ctrl+S", ...}.
-    open_menus=False only reads what can be read without opening anything (for
-    the phone's shortcut pad, when the user switches apps)."""
+    """All menu items. open_menus=False reads only what's available without opening menus."""
     cached = _cache.get(pid)
     if use_cache and cached and time.time() - cached[0] < CACHE_SECONDS:
         return cached[1]
@@ -335,7 +318,7 @@ def _find_uia(pid: int, path: list[str]):
 def item_enabled(pid: int, path: list[str]) -> bool | None:
     how = _how.get((pid, tuple(path)))
     if not how or how["kind"] != "classic":
-        return None  # (newer menus: only known by opening them; keep what the list says)
+        return None
     menu = user32.GetMenu(how["hwnd"])
     for depth, title in enumerate(path):
         positions = range(max(0, user32.GetMenuItemCount(menu)))
@@ -351,7 +334,7 @@ def item_enabled(pid: int, path: list[str]) -> bool | None:
 
 
 def press(pid: int, path: list[str]) -> None:
-    """Click the menu item at `path`, e.g. ["File", "Save"]."""
+    """Click the menu item at `path`."""
     how = _how.get((pid, tuple(path)))
     if how and how["kind"] == "classic" and how["id"]:
         if item_enabled(pid, path) is False:
@@ -373,15 +356,13 @@ def press(pid: int, path: list[str]) -> None:
 
 
 def show(pid: int, path: list[str]) -> tuple[int, int, int, int] | None:
-    """Open the menu so the item can be seen, and return where it is on screen.
-    For items in a submenu (File > Share > Email) this is the first-level item
-    ("Share"), like on the Mac."""
+    """Open the menu and return the item's frame (first-level item for submenus)."""
     try:
         item = _find_uia(pid, path[:2])
         return uia.rect(item)
     except LookupError:
         pass
-    # A classic menu Windows doesn't show to UI Automation: point at its title in the menu bar.
+    # Classic menus hidden from UI Automation: point at the menu bar title.
     how = _how.get((pid, tuple(path)))
     if how and how["kind"] == "classic":
         menu = user32.GetMenu(how["hwnd"])
@@ -394,7 +375,7 @@ def show(pid: int, path: list[str]) -> tuple[int, int, int, int] | None:
 
 
 def close(pid: int, path: list[str]) -> None:
-    """Close the menu that show() opened, if it is still open."""
+    """Close the menu opened by show()."""
     try:
         _collapse_all()
     except Exception:

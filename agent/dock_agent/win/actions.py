@@ -1,18 +1,17 @@
-"""The things the Windows agent is allowed to do: the same jobs, names and
-answers as dock_agent/actions.py on the Mac, so the server doesn't need to
-know which computer it's talking to. Only functions listed in ACTIONS can be
-run by the server; anything else is refused."""
+"""Actions the server may run on Windows (same names and replies as the Mac agent).
+Anything not in ACTIONS is refused.
+"""
 
 import os
 import time
 
-from dock_agent import files, tidy
+from dock_agent import documents, files, tidy
 from dock_agent.win import apps, arrange, bubble, menus, onscreen, overlay, reading, recap, savepanel, tray, winapi, workspaces
 from dock_agent.workspaces_common import WorkspaceError
 
 
 class ActionError(Exception):
-    """A problem worth telling the user about, e.g. an unknown folder."""
+    """An error message meant for the user."""
 
 
 def open_folder(name: str, close: bool = True) -> dict:
@@ -44,7 +43,7 @@ def arrange_windows(layout: list[dict], screen: str = "this", hide_others: bool 
 
 
 def open_url(url: str) -> dict:
-    """Open a web link in the default browser. Only https links."""
+    """Open an https link in the default browser."""
     if not url.startswith("https://"):
         raise ActionError("I only open https links.")
     os.startfile(url)
@@ -123,7 +122,7 @@ def save_in_folder(folder: str, new_folder: bool = False) -> dict:
 
 
 def read_text(path: str = "") -> dict:
-    if not path:  # (the selection: the user's app needs the keyboard back from Dock's chat box first)
+    if not path:
         _bring_forward(menus.front_app()[1])
     try:
         return reading.read_text(path)
@@ -136,7 +135,7 @@ def day_recap(day: str = "today") -> dict:
 
 
 def permissions() -> dict:
-    """Windows asks no permission for menus or screenshots; only the microphone has a privacy switch."""
+    """Only the microphone has a permission on Windows."""
     from dock_agent import speech
     return {"accessibility": True, **speech.permissions(), "screen": True}
 
@@ -174,15 +173,14 @@ def _same_app(pid: int) -> None:
 
 
 def _bring_forward(pid: int) -> None:
-    """Make sure the user's app has the keyboard before Dock acts in it: close
-    Dock's chat box if it's open, and hand the front back to the app."""
+    """Give the keyboard back to the user's app (close the chat box first)."""
     if bubble.has_keyboard():
         bubble.compose(False)
     hwnd = winapi.window_of(pid)
     if hwnd and winapi.foreground() != hwnd:
         if not winapi.bring_forward(hwnd):
             print(f"Couldn't give the keyboard back to {winapi.title(hwnd)}")
-    time.sleep(0.15)  # (let its window take the keyboard)
+    time.sleep(0.15)
 
 
 def press_control(pid: int, number: int) -> dict:
@@ -256,7 +254,7 @@ def app_menus() -> dict:
 
 
 def selection_size() -> dict:
-    """How much text is selected (asked through UI Automation only: nothing is copied)."""
+    """Length of the selection (via UI Automation, nothing copied)."""
     name, _ = menus.front_app()
     return {"app": name, "chars": len(reading.selected_by_uia().strip())}
 
@@ -283,7 +281,7 @@ def insert_below_selection(pid: int, text: str) -> dict:
 
 
 def save_panel_text() -> dict:
-    """The start of the document a Save window is saving (for a better folder suggestion)."""
+    """Start of the document in the open Save dialog."""
     _, pid = menus.front_app()
     return {"text": reading.window_text(pid)}
 
@@ -341,6 +339,8 @@ ACTIONS = {
     "open_app_names": open_app_names,
     "bring_app_forward": bring_app_forward,
     "downloads_overview": downloads_overview,
+    "list_documents": documents.list_documents,
+    "document_texts": documents.document_texts,
     "move_files": move_files,
     "undo_moves": undo_moves,
     "point_at_save_folder": point_at_save_folder,

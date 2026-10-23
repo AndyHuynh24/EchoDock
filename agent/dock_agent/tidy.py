@@ -1,14 +1,4 @@
-"""Tidy the Downloads folder.
-
-- `overview` lists the newest files in Downloads (with the website each came
-  from) and the user's folders, so the server can suggest where each file
-  belongs.
-- `move` moves files out of Downloads into the user's folders. It only moves
-  files that are directly in Downloads, never overwrites anything, and records
-  each move so `undo` can put them back.
-- `watch_downloads` notices each new download as it finishes, and tells the
-  server, so Dock can suggest where to put it straight away.
-"""
+"""Downloads tidy-up on the agent side: overview, safe moves with undo, and new-download detection."""
 
 import json
 import shutil
@@ -26,12 +16,12 @@ UNDO_FILE = HOME / ".dock" / "last_moves.json"
 DESTINATION_ROOTS = [HOME / "Documents", HOME / "Desktop", HOME / "Library" / "CloudStorage",
                      HOME / "Library" / "Mobile Documents" / "com~apple~CloudDocs", HOME / "OneDrive"]
 MAX_FILES = 40
-MAX_FOLDERS = 600  # (a student's Documents, Desktop and cloud drives are usually 300–500, 3 levels deep)
+MAX_FOLDERS = 600
 FOLDER_DEPTH = 3
 PARTIAL_DOWNLOADS = (".crdownload", ".download", ".part", ".partial", ".tmp")
-INSTALLERS = (".dmg", ".pkg", ".app", ".mpkg", ".exe", ".msi", ".msix", ".appx")  # no point suggesting a folder for these
+INSTALLERS = (".dmg", ".pkg", ".app", ".mpkg", ".exe", ".msi", ".msix", ".appx")
 WATCH_SECONDS = 3
-_put_back: set[str] = set()  # files undo just put back in Downloads: not new downloads
+_put_back: set[str] = set()  # files just restored by undo
 
 
 class TidyError(Exception):
@@ -39,9 +29,7 @@ class TidyError(Exception):
 
 
 def _came_from(path: Path) -> str:
-    """The website a download came from, e.g. "mail.google.com". The Mac keeps
-    it in Spotlight; Windows in the file's "Zone.Identifier" stream (which also
-    gives the "this file came from the internet" warning)."""
+    """Source website of a download (Spotlight on macOS, Zone.Identifier on Windows)."""
     if WINDOWS:
         try:
             with open(f"{path}:Zone.Identifier", encoding="utf-8", errors="ignore") as stream:
@@ -60,9 +48,7 @@ def _came_from(path: Path) -> str:
 
 
 def _folders() -> list[str]:
-    """The user's folders (up to 3 levels deep), as paths relative to home.
-    Level by level across all the places (Documents, Desktop, cloud drives),
-    so one big folder can't fill the list before Desktop is even looked at."""
+    """User folders up to 3 levels deep, relative to home, breadth-first."""
     found = []
     level = [(root, 0) for root in DESTINATION_ROOTS if root.is_dir()]
     while level and len(found) < MAX_FOLDERS:
@@ -71,39 +57,39 @@ def _folders() -> list[str]:
             if len(found) >= MAX_FOLDERS:
                 break
             root = depth == 0
-            # Documents and Desktop themselves are fine places; cloud-drive roots are not.
+            # Documents and Desktop are valid targets; cloud-drive roots are not.
             if _visible(folder) and (not root or folder in (HOME / "Documents", HOME / "Desktop")):
-                found.append(folder.relative_to(HOME).as_posix())  # (with "/" on Windows too)
+                found.append(folder.relative_to(HOME).as_posix())
             if depth >= FOLDER_DEPTH or (folder / ".git").exists():
-                continue  # don't dig into code projects
+                continue  # skip code projects
             try:
                 children = sorted(p for p in folder.iterdir() if p.is_dir())
             except OSError:
                 continue
             below += [(c, depth + 1) for c in children
                       if not c.name.startswith(".") and c.name not in SKIP_PARTS and not c.name.endswith("_files")]
-        level = below  # ("_files": the pictures of a web page saved from a browser)
+        level = below
     return sorted(found)
 
 
 def _downloaded_files() -> list[Path]:
-    """Finished downloads directly in Downloads (not hidden, not half-downloaded)."""
+    """Finished downloads directly in Downloads."""
     return [p for p in DOWNLOADS.iterdir()
             if p.is_file() and not p.name.startswith(".") and not p.name.endswith(PARTIAL_DOWNLOADS)]
 
 
-SAYS_CHARS = 300  # how much of each file's text the tidy plan sees
+SAYS_CHARS = 300
 
 
 def _says(path: Path) -> str:
-    """The start of what a file says (PDF, Word, slides, text, code), or ""."""
+    """Start of a file's text, or ""."""
     if WINDOWS:
         from dock_agent.win import reading
     else:
         from dock_agent import reading
     try:
         return " ".join(reading.file_text(str(path))[:SAYS_CHARS * 2].split())[:SAYS_CHARS]
-    except Exception:  # (pictures, videos, installers, unreadable files)
+    except Exception:
         return ""
 
 
@@ -136,7 +122,7 @@ def _destination(to: str, new_folder: bool) -> Path:
 
 
 def _free_name(folder: Path, name: str) -> Path:
-    """`folder/name`, or `name (2)` etc. if that is taken, so nothing is overwritten."""
+    """A free destination path, adding " (2)" etc. if needed."""
     target = folder / name
     stem, suffix, n = target.stem, target.suffix, 2
     while target.exists():
@@ -180,9 +166,7 @@ def undo() -> dict:
 
 
 def watch_downloads() -> None:
-    """Start a background check of Downloads every few seconds. Files already
-    there when Dock starts are left alone. A new file is announced once its size
-    has stopped changing, so it's really finished."""
+    """Poll Downloads and report new files once their size stops changing."""
     threading.Thread(target=_watch, daemon=True).start()
 
 
@@ -195,11 +179,11 @@ def _sizes() -> dict[str, int]:
 
 def _watch() -> None:
     known = set(_sizes())
-    waiting: dict[str, int] = {}  # new file -> size at the last check
+    waiting: dict[str, int] = {}
     while True:
         time.sleep(WATCH_SECONDS)
         sizes = _sizes()
-        known &= set(sizes)  # forget files that were moved away, so a new copy counts again
+        known &= set(sizes)
         for name, size in sizes.items():
             if name in known:
                 continue
@@ -208,7 +192,7 @@ def _watch() -> None:
                 known.add(name)
                 continue
             if waiting.get(name) != size:
-                waiting[name] = size  # still growing (or just appeared): check again next time
+                waiting[name] = size
                 continue
             known.add(name)
             waiting.pop(name, None)

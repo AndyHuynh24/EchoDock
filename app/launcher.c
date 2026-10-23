@@ -1,7 +1,5 @@
-// OneDock.app's program. It starts Dock (scripts/start.sh) and stays its
-// parent while Dock runs. Because of that, macOS asks for the microphone,
-// speech recognition and Accessibility for "OneDock", not for Python or a
-// Terminal window. Dock's output goes to ~/Library/Logs/Dock/dock.log.
+// OneDock.app launcher: runs scripts/start.sh as a child process so macOS
+// attributes permissions to OneDock. Log: ~/Library/Logs/Dock/dock.log
 #include <libgen.h>
 #include <mach-o/dyld.h>
 #include <signal.h>
@@ -26,7 +24,7 @@ int main(void) {
     uint32_t size = sizeof exe;
     if (_NSGetExecutablePath(exe, &size) != 0) return 1;
 
-    // Contents/Resources/root holds the path of the Dock folder (written by build_app.sh).
+    // Contents/Resources/root holds the Dock folder path (written by build_app.sh).
     snprintf(file, sizeof file, "%s/../Resources/root", dirname(exe));
     FILE *f = fopen(file, "r");
     if (!f || !fgets(root, sizeof root, f)) return 1;

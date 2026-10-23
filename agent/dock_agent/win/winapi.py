@@ -1,10 +1,6 @@
-"""Small Windows helpers the Windows agent shares: windows and the apps they
-belong to, bringing a window to the front, keys, the clipboard, screens and
-idle time. (Win32 through pywin32 and ctypes.)
-
-Coordinates are real screen pixels everywhere: the agent is "per-monitor DPI
-aware" (uiautomation sets that when it loads), so window positions, UI
-Automation rectangles, the mouse and screenshots all agree.
+"""Win32 helpers (pywin32 and ctypes): windows, processes, focus, keys, clipboard,
+screens and recent files. The process is per-monitor DPI aware, so all coordinates
+are physical pixels.
 """
 
 import ctypes
@@ -28,10 +24,9 @@ dwmapi = ctypes.windll.dwmapi
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 DWMWA_EXTENDED_FRAME_BOUNDS = 9
 DWMWA_CLOAKED = 14
-FRAME_HOST = "applicationframehost.exe"  # hosts Store apps (Calculator, Settings…)
+FRAME_HOST = "applicationframehost.exe"  # hosts Store apps
 
-# What people call an app, by its program file (the file's own description
-# is used for everything else, e.g. "Google Chrome").
+# Friendly names by executable; others use the file description.
 NAMES = {
     "explorer": "File Explorer", "windowsterminal": "Terminal", "code": "Visual Studio Code",
     "msedge": "Microsoft Edge", "chrome": "Google Chrome", "firefox": "Firefox", "winword": "Microsoft Word",
@@ -44,14 +39,14 @@ NAMES = {
 
 
 def com_ready() -> None:
-    """COM (Windows Search, shortcuts, File Explorer windows) must be started once per thread."""
+    """Initialize COM once per thread."""
     try:
         pythoncom.CoInitialize()
     except pythoncom.com_error:
         pass
 
 
-# ---- Windows and apps ----
+# ---- windows and apps ----
 
 def foreground() -> int:
     return win32gui.GetForegroundWindow()
@@ -75,7 +70,7 @@ _exe_cache: dict[int, str] = {}
 
 
 def exe_path(pid: int) -> str:
-    """The program file of a process, e.g. C:\\Program Files\\…\\chrome.exe ("" if hidden from us)."""
+    """Executable path of a process, or ""."""
     if pid in _exe_cache:
         return _exe_cache[pid]
     handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
@@ -93,8 +88,7 @@ def exe_path(pid: int) -> str:
 
 
 def window_pid(hwnd: int) -> int:
-    """The process of the app that owns this window. Store apps all run inside
-    one "frame host" process, so for those it's the app's own process inside it."""
+    """Process that owns the window (resolves Store apps inside ApplicationFrameHost)."""
     pid = _raw_pid(hwnd)
     if not exe_path(pid).lower().endswith(FRAME_HOST):
         return pid
@@ -125,7 +119,7 @@ _name_cache: dict[str, str] = {}
 
 
 def app_name(pid: int, hwnd: int = 0) -> str:
-    """What people call the app: "Google Chrome", "File Explorer", "Calculator"."""
+    """Friendly app name, e.g. "Google Chrome"."""
     path = exe_path(pid)
     stem = Path(path).stem.lower() if path else ""
     if stem in NAMES:
@@ -134,13 +128,11 @@ def app_name(pid: int, hwnd: int = 0) -> str:
         return title(hwnd) or "This app"
     if path not in _name_cache:
         described = _description(path)
-        # (Some programs describe themselves at length: keep it short.)
         _name_cache[path] = described if described and len(described) <= 40 else Path(path).stem
     return _name_cache[path]
 
 
-# Windows' own shell: the taskbar, the desktop, Start and search. Clicking Dock's
-# tray icon puts the taskbar in front, but the user is still "in" their app.
+# Shell windows (taskbar, desktop, Start) don't count as the user's app.
 SHELL_CLASSES = {"Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW", "NotifyIconOverflowWindow",
                  "TopLevelWindowForOverflowXamlIsland", "XamlExplorerHostIslandWindow"}
 SHELL_PROGRAMS = {"startmenuexperiencehost.exe", "searchhost.exe", "searchapp.exe", "shellexperiencehost.exe",
@@ -157,14 +149,14 @@ def is_shell(hwnd: int) -> bool:
 
 
 def _cloaked(hwnd: int) -> bool:
-    """Windows on another virtual desktop, or Store apps that are suspended, are "cloaked"."""
+    """Cloaked: on another virtual desktop, or a suspended Store app."""
     value = ctypes.c_int(0)
     dwmapi.DwmGetWindowAttribute(wintypes.HWND(hwnd), DWMWA_CLOAKED, ctypes.byref(value), ctypes.sizeof(value))
     return value.value != 0
 
 
 def is_app_window(hwnd: int) -> bool:
-    """A normal window with a title, as in the taskbar (not tool windows or hidden ones)."""
+    """A normal taskbar window."""
     if not win32gui.IsWindowVisible(hwnd) or _cloaked(hwnd) or not title(hwnd) or is_shell(hwnd):
         return False
     style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
@@ -175,7 +167,7 @@ def is_app_window(hwnd: int) -> bool:
 
 
 def app_windows() -> list[int]:
-    """The app windows on this desktop, front first (not Dock's own)."""
+    """App windows on this desktop, front first (excluding Dock)."""
     found = []
 
     def each(hwnd, _):
@@ -187,7 +179,7 @@ def app_windows() -> list[int]:
     return found
 
 
-_last_window: dict[int, int] = {}  # pid -> the window last seen in front for that app
+_last_window: dict[int, int] = {}  # pid -> last front window
 
 
 def remember(hwnd: int, pid: int) -> None:
@@ -195,7 +187,7 @@ def remember(hwnd: int, pid: int) -> None:
 
 
 def window_of(pid: int) -> int:
-    """The app's window to act on: the one last seen in front, else its front-most one."""
+    """The app's last front window, else its topmost one."""
     hwnd = _last_window.get(pid)
     if hwnd and win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
         return hwnd
@@ -203,8 +195,7 @@ def window_of(pid: int) -> int:
 
 
 def rect(hwnd: int) -> tuple[int, int, int, int] | None:
-    """Where the window is on screen: (x, y, width, height), without the
-    invisible borders Windows 10 and 11 put around windows."""
+    """Visible window frame (x, y, width, height), without invisible borders."""
     box = wintypes.RECT()
     if dwmapi.DwmGetWindowAttribute(wintypes.HWND(hwnd), DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(box), ctypes.sizeof(box)) != 0:
         try:
@@ -217,7 +208,7 @@ def rect(hwnd: int) -> tuple[int, int, int, int] | None:
 
 
 def borders(hwnd: int) -> tuple[int, int, int, int]:
-    """The invisible borders (left, top, right, bottom) between GetWindowRect and what you see."""
+    """Invisible border sizes (left, top, right, bottom)."""
     try:
         outer = win32gui.GetWindowRect(hwnd)
     except win32gui.error:
@@ -229,9 +220,7 @@ def borders(hwnd: int) -> tuple[int, int, int, int]:
 
 
 def bring_forward(hwnd: int) -> bool:
-    """Bring a window to the front and give it the keyboard. Windows only lets
-    the app in front hand over the front, so Dock briefly joins the front
-    app's input (AttachThreadInput), the usual way to do this."""
+    """Bring a window to the front and focus it (via AttachThreadInput)."""
     if not hwnd or not win32gui.IsWindow(hwnd):
         return False
     if win32gui.IsIconic(hwnd):
@@ -258,14 +247,14 @@ def bring_forward(hwnd: int) -> bool:
     return foreground() == hwnd
 
 
-# ---- Keys ----
+# ---- keys ----
 
 EXTENDED = {win32con.VK_LEFT, win32con.VK_RIGHT, win32con.VK_UP, win32con.VK_DOWN, win32con.VK_HOME,
             win32con.VK_END, win32con.VK_PRIOR, win32con.VK_NEXT, win32con.VK_INSERT, win32con.VK_DELETE}
 
 
 def keys(*codes: int) -> None:
-    """Press a key combination, e.g. keys(VK_CONTROL, ord("V")): down in order, up in reverse."""
+    """Press a key combination, releasing in reverse order."""
     for code in codes:
         win32api.keybd_event(code, 0, win32con.KEYEVENTF_EXTENDEDKEY if code in EXTENDED else 0, 0)
         time.sleep(0.01)
@@ -276,7 +265,7 @@ def keys(*codes: int) -> None:
 
 
 def any_key_down() -> bool:
-    """Is a key or mouse button held right now?"""
+    """Whether a key or mouse button is down."""
     return any(win32api.GetAsyncKeyState(code) & 0x8000 for code in range(0x01, 0xFF) if code not in (0x07, 0x0A, 0x0B))
 
 
@@ -284,13 +273,13 @@ def idle_seconds() -> float:
     return (win32api.GetTickCount() - win32api.GetLastInputInfo()) / 1000
 
 
-# ---- Clipboard ----
+# ---- clipboard ----
 
 _clipboard_lock = threading.Lock()
 
 
 def _open_clipboard() -> bool:
-    for _ in range(20):  # another app may be using it for a moment
+    for _ in range(20):
         try:
             win32clipboard.OpenClipboard()
             return True
@@ -300,7 +289,6 @@ def _open_clipboard() -> bool:
 
 
 def clipboard_number() -> int:
-    """Changes every time anything is copied."""
     return user32.GetClipboardSequenceNumber()
 
 
@@ -311,7 +299,7 @@ def _kept_formats() -> list[int]:
 
 
 def save_clipboard() -> dict:
-    """What's on the clipboard now (text, pictures, formatted text), to put back later."""
+    """Snapshot of the clipboard, to restore later."""
     saved = {}
     with _clipboard_lock:
         if not _open_clipboard():
@@ -366,11 +354,10 @@ def set_clipboard_text(text: str) -> None:
             win32clipboard.CloseClipboard()
 
 
-# ---- Screens ----
+# ---- screens ----
 
 def screens() -> list[dict]:
-    """Each screen: {"area": usable (x, y, w, h) without the taskbar, "full": the
-    whole screen, "primary": bool}, the main screen first."""
+    """Screens as {"area", "full", "primary"}, primary first."""
     found = []
     for monitor, _, _ in win32api.EnumDisplayMonitors():
         info = win32api.GetMonitorInfo(monitor)
@@ -389,21 +376,21 @@ def screen_of(point: tuple[float, float]) -> dict:
 
 
 def scale() -> float:
-    """How much bigger than normal things are drawn (1.5 at 150 %)."""
+    """Display scale factor (1.5 at 150%)."""
     try:
         return user32.GetDpiForSystem() / 96
     except Exception:
         return 1.0
 
 
-# ---- Recent files (Windows keeps a shortcut for each file you open) ----
+# ---- recent files ----
 
 RECENT = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Recent"
 _recent_cache: tuple[float, list[tuple[float, Path]]] = (0.0, [])
 
 
 def recent_files(max_files: int = 300) -> list[tuple[float, Path]]:
-    """(when it was opened, the file) for recently opened files, newest first. Cached for a minute."""
+    """(opened time, file) for recent files, newest first. Cached for a minute."""
     global _recent_cache
     if time.time() - _recent_cache[0] < 60:
         return _recent_cache[1]
@@ -424,8 +411,7 @@ def recent_files(max_files: int = 300) -> list[tuple[float, Path]]:
 
 
 def document_in_title(window_title: str) -> str:
-    """The file a window shows, if its title names a file opened recently
-    ("hw4.Rmd - RStudio", "Report.docx - Word")."""
+    """File shown by a window, if its title names a recent file."""
     lowered = window_title.lower()
     for _, path in recent_files():
         if path.name.lower() in lowered or (len(path.stem) > 3 and path.stem.lower() in lowered.split(" - ")[0]):

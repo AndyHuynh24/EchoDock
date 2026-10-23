@@ -1,11 +1,4 @@
-"""The hub keeps track of who is connected (the desktop agent and any phones)
-and passes messages between them and the MCP tools.
-
-- The desktop agent connects to /ws/agent. Tools call `ask_agent(...)`, which
-  sends a job to the agent and waits for its reply.
-- Phones connect to /ws/phone. Tools call `push_phone(...)` to show something
-  on every connected phone.
-"""
+"""Tracks connected clients (desktop agent, phones) and routes messages between them and the MCP tools."""
 
 import asyncio
 import json
@@ -27,23 +20,21 @@ class Hub:
         self.token = token
         self.agent: WebSocket | None = None
         self.phones: set[WebSocket] = set()
-        self.mac_screens: set[WebSocket] = set()  # the Mac's own bubble uses the phone page too
-        self.talked = False  # someone asked Dock something since it started (for the setup page)
-        # Which computer the desktop agent runs on ("mac" or "windows") and its talk key:
-        # the agent says so when it connects (its "hello").
+        self.mac_screens: set[WebSocket] = set()
+        self.talked = False  # for the setup page
+        # Reported by the agent when it connects.
         self.platform = "mac"
         self.talk_key = "⌥ Space"
         self.pending: dict[int, asyncio.Future] = {}
         self.next_id = 0
-        # Optional handlers, set by main.py:
-        self.on_agent_event = None    # async (event: dict) -> None, e.g. "the app in front changed"
-        self.on_phone_message = None  # async (message: dict) -> None, e.g. a shortcut-pad tap
-        self.on_phone_connect = None  # async (ws) -> None
+        # Optional handlers, set by main.py.
+        self.on_agent_event = None
+        self.on_phone_message = None
+        self.on_phone_connect = None
         self._tasks: set[asyncio.Task] = set()
 
     def _run_in_background(self, coroutine) -> None:
-        """Handle a message without blocking the socket loop (a handler may need
-        to ask the agent something, and the reply arrives on this same loop)."""
+        """Run a handler without blocking the socket loop."""
         async def safely():
             try:
                 await coroutine
@@ -110,8 +101,7 @@ class Hub:
         return ("Ctrl+Z", "Control Z") if self.platform == "windows" else ("⌘Z", "Command Z")
 
     def real_phones(self) -> int:
-        """Phones connected (not counting the Mac's own bubble). When one is
-        docked, cards show there instead of in the Mac bubble."""
+        """Connected phones, not counting the Mac bubble."""
         return len(self.phones - self.mac_screens)
 
     async def ask_agent(self, action: str, timeout: float = 5, **args) -> dict:

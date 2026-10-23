@@ -1,8 +1,6 @@
-"""What the user did today (or yesterday), on Windows: minutes per app
-(recorded by watch.py while the agent runs), the files they changed (by
-looking through their folders), and the files they opened (Windows keeps a
-shortcut to each one in its Recent folder). The same answers as
-dock_agent/recap.py on the Mac."""
+"""Today's activity on Windows: minutes per app (watch.py), files changed, and files
+opened (from the Recent folder).
+"""
 
 import os
 import time

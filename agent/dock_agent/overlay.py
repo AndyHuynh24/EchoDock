@@ -1,13 +1,7 @@
-"""The on-screen pointer: a see-through, click-through window that draws a
-highlight box, an arrow and a label next to a spot on the screen.
+"""On-screen pointer: a transparent, click-through window with a highlight, arrow and label.
 
-It goes away as soon as you do something (click, type, scroll, or move the
-mouse a little), so it never stays on screen while you're already busy with
-something else. Otherwise it goes after SHOW_SECONDS.
-
-AppKit windows must be created on the main thread, so the agent runs the
-AppKit event loop on the main thread (see main.py) and `show`/`hide` hand
-their work to it with AppHelper.callAfter."""
+Hidden on any user input or after SHOW_SECONDS. Runs on the main thread via AppHelper.callAfter.
+"""
 
 import math
 import time
@@ -43,29 +37,28 @@ from AppKit import (
 from PyObjCTools import AppHelper
 
 SHOW_SECONDS = 6
-IGNORE_FIRST_SECONDS = 0.5  # right after it appears, don't count small jitters
-MOVE_PIXELS = 25           # moving the mouse further than this hides it
-MARGIN = 360  # room around the target for the arrow and a short label
-LABEL_START = 200  # how far from the target the label starts (see drawRect_)
+IGNORE_FIRST_SECONDS = 0.5
+MOVE_PIXELS = 25
+MARGIN = 360
+LABEL_START = 200
 
 _window = None
-_shown = 0  # counts shows, so an old timer doesn't hide a newer pointer
-_monitor = None  # watches the mouse and keyboard while the pointer is shown
+_shown = 0  # so an old timer doesn't hide a newer pointer
+_monitor = None
 
 
 def start_app() -> None:
-    """Set up AppKit for a background helper (no Dock icon). Call on the main thread."""
+    """Set up AppKit as a background app. Main thread."""
     NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
 
 def run() -> None:
-    """Run the AppKit event loop on the main thread until Ctrl+C."""
+    """Run the AppKit event loop until Ctrl+C."""
     AppHelper.runEventLoop(installInterrupt=True)
 
 
 def show(rect: tuple[float, float, float, float], label: str, on_hide=None) -> None:
-    """Point at `rect` (x, y, width, height from the top-left of the main screen).
-    Safe to call from any thread."""
+    """Point at `rect` (x, y, width, height, top-left origin). Thread-safe."""
     AppHelper.callAfter(_show, rect, label, on_hide)
 
 
@@ -74,7 +67,6 @@ def hide() -> None:
 
 
 class PointerView(NSView):
-    """Draws the highlight, arrow and label. Uses top-left coordinates."""
 
     def isFlipped(self):
         return True
@@ -83,7 +75,6 @@ class PointerView(NSView):
         orange = NSColor.systemOrangeColor()
         x, y, w, h = self.target
 
-        # Highlight box around the target.
         box = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(x - 4, y - 4, w + 8, h + 8), 6, 6)
         orange.colorWithAlphaComponent_(0.18).setFill()
         box.fill()
@@ -91,8 +82,7 @@ class PointerView(NSView):
         orange.setStroke()
         box.stroke()
 
-        # Arrow: from below for menu bar titles, from the right for menu items.
-        # Near the right edge of the screen, the arrow and label go on the left.
+        # Arrow from below for menu bar titles, from the right for menu items (left near the edge).
         side = -1 if self.flipped else 1
         if y < 40:
             head = (x + w / 2, y + h + 8)
@@ -103,7 +93,6 @@ class PointerView(NSView):
         for color, width in ((NSColor.whiteColor(), 11), (orange, 6)):
             _draw_arrow(head, tail, color, width)
 
-        # Label bubble at the arrow's tail.
         attributes = _label_attributes()
         text = NSString.stringWithString_(self.label)
         size = text.sizeWithAttributes_(attributes)
@@ -125,7 +114,7 @@ def _draw_arrow(head, tail, color, width) -> None:
     angle = math.atan2(head[1] - tail[1], head[0] - tail[0])
     path = NSBezierPath.bezierPath()
     path.setLineWidth_(width)
-    path.setLineCapStyle_(1)  # round
+    path.setLineCapStyle_(1)
     path.setLineJoinStyle_(1)
     path.moveToPoint_(NSMakePoint(*tail))
     path.lineToPoint_(NSMakePoint(*head))
@@ -144,17 +133,15 @@ def _show(rect, label, on_hide) -> None:
     shown = _shown
 
     x, y, w, h = rect
-    # Long labels ("Show Downloads  ⌥⌘L") need a wider window, or they get cut off.
+    # Size the window to fit long labels.
     label_width = NSString.stringWithString_(label).sizeWithAttributes_(_label_attributes()).width
     room = max(MARGIN, LABEL_START + label_width + 60)
-    # Not enough room right of the target on its screen? Put the arrow and label on the left.
     screens = [f for f in (screen.frame() for screen in NSScreen.screens()) if f.origin.x <= x < f.origin.x + f.size.width]
     right_edge = (screens[0].origin.x + screens[0].size.width) if screens else x + w + room
     flipped = x + w + room > right_edge
-    # The window covers the target plus room for the arrow and label.
     left, top = (x - room if flipped else x - 40), y - 40
     width, height = w + room + 40, h + 260
-    # AppKit measures windows from the bottom-left of the main screen.
+    # AppKit uses a bottom-left origin.
     screen_height = NSScreen.screens()[0].frame().size.height
     frame = NSMakeRect(left, screen_height - top - height, width, height)
 
@@ -165,7 +152,7 @@ def _show(rect, label, on_hide) -> None:
     window.setBackgroundColor_(NSColor.clearColor())
     window.setHasShadow_(False)
     window.setIgnoresMouseEvents_(True)
-    window.setLevel_(NSScreenSaverWindowLevel)  # above open menus
+    window.setLevel_(NSScreenSaverWindowLevel)
     window.setCollectionBehavior_(
         NSWindowCollectionBehaviorCanJoinAllSpaces
         | NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -190,19 +177,18 @@ def _show(rect, label, on_hide) -> None:
 
 
 def _watch_user(shown_at: float) -> None:
-    """Hide the pointer as soon as the user clicks, types, scrolls or moves the mouse."""
+    """Hide on click, key press, scroll or mouse move."""
     global _monitor
     start = NSEvent.mouseLocation()
 
     def handle(event):
         if time.time() - shown_at < IGNORE_FIRST_SECONDS:
             return
-        if event.type() == 5:  # mouse moved: only count a real move, not a nudge
+        if event.type() == 5:
             now = NSEvent.mouseLocation()
             if math.hypot(now.x - start.x, now.y - start.y) < MOVE_PIXELS:
                 return
-        # Only the pointer goes now. A menu Dock opened stays open for the user to
-        # click; if they don't, the timer below still closes it.
+        # Leave any menu Dock opened; the timer closes it later.
         _hide()
 
     mask = (NSEventMaskMouseMoved | NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown

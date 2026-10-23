@@ -1,8 +1,4 @@
-"""Dock's icon in the Windows tray (by the clock), instead of the Mac's menu
-bar face: click it to ask Dock (the chat box opens), right-click for the
-menu: open Dock, add your phone, start at login, quit. It turns cyan while
-Dock listens, and its tooltip shows the focus countdown. Through pystray.
-"""
+"""Tray icon (pystray): click to ask Dock, right-click for the menu. Cyan while listening."""
 
 import os
 import subprocess
@@ -23,7 +19,7 @@ _state = {"status": "Dock is starting…", "focus": ""}
 
 
 def _face(listening: bool) -> Image.Image:
-    """Two eyes and a smile on a round badge (readable on light and dark taskbars)."""
+    """Dock's face on a round badge."""
     size = 64
     image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
@@ -41,15 +37,15 @@ def _title() -> str:
 
 
 def _ask(icon, item) -> None:
-    from dock_agent.win import talk  # (talk uses this module too)
-    if talk.listening():  # clicked again: cancel
+    from dock_agent.win import talk
+    if talk.listening():
         talk.cancel()
-    else:  # (be quiet if Dock is talking; otherwise open the chat box and listen)
+    else:
         talk.tap()
 
 
 def _quit(icon, item) -> None:
-    """Stop everything: the server, this agent and the phone tunnel (started together by scripts/start.ps1)."""
+    """Stop the server, agent and tunnel started by scripts/start.ps1."""
     launcher = os.environ.get("DOCK_LAUNCHER_PID")
     if launcher:
         subprocess.run(["taskkill", "/PID", launcher, "/T", "/F"], capture_output=True)
@@ -103,7 +99,7 @@ def apply_start_at_login(on: bool) -> None:
 
 
 def set_start_at_login(on: bool) -> None:
-    """Start Dock at login: a shortcut to scripts/OneDock.vbs in the Startup folder."""
+    """Start at login via a Startup folder shortcut to scripts/OneDock.vbs."""
     if not on:
         LOGIN_ITEM.unlink(missing_ok=True)
         return

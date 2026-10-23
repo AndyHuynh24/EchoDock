@@ -183,7 +183,7 @@
       $(id).querySelector(".mark").textContent = done ? "✓" : $(id).dataset.n;
     }
 
-    // The same page on Windows: other names for the same places and keys.
+    // Windows names and keys.
     const WIN = navigator.userAgent.includes("Windows");
     if (WIN) {
       const fill = (selector, text) => document.querySelectorAll(selector).forEach((el) => { el.textContent = text; });
@@ -192,8 +192,8 @@
       fill(".where-bubble", "at the bottom right");
       fill(".computer", "PC");
       fill(".start-cmd", "scripts\\start.ps1");
-      $("s-ax").hidden = true;      // (Windows needs no permission to read menus)
-      $("s-screen").hidden = true;  // (or to take a screenshot)
+      $("s-ax").hidden = true;  // no permissions needed on Windows
+      $("s-screen").hidden = true;
       STEPS.filter((id) => !$(id).hidden).forEach((id, n) => { $(id).dataset.n = n + 1; });
     }
 
@@ -241,7 +241,7 @@
       }
       $("phone").classList.toggle("done", s.phones > 0);
 
-      // Google: one sign-in for Calendar and Gmail (the user may have unticked one on Google's page).
+      // One Google sign-in covers Calendar and Gmail.
       const signedIn = !!s.google_address;
       $("s-google").classList.toggle("done", signedIn && !!s.calendar && !!s.mail);
       $("b-google").hidden = s.google_busy || !s.google_ready || (signedIn && !!s.calendar && !!s.mail);

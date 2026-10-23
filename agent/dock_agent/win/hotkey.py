@@ -1,14 +1,7 @@
-"""The talk key on Windows: press Alt+Space once anywhere to talk to Dock (like
-tapping the face on the phone; ⌥ Space on the Mac; PowerToys Run uses the same
-keys). Press it again to send right away.
+"""Global talk key (Alt+Space) using a low-level keyboard hook.
 
-A low-level keyboard hook sees the keys before the app in front does and
-swallows Space, so it doesn't type a space or open the window menu. Letting
-go of Alt alone would select the app's menu bar, so Dock "masks" it with an
-unused key (the same trick AutoHotkey uses). No permission is needed.
-
-The hook has its own thread and message loop; on_tap runs on a helper
-thread, because Windows drops hooks that take too long to answer.
+Space is swallowed, and Alt is masked with an unused key so the app's menu bar
+doesn't activate. on_tap runs on a helper thread so the hook never times out.
 """
 
 import ctypes
@@ -23,7 +16,7 @@ WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP = 0x100, 0x101, 0x104, 0x105
 VK_SPACE, VK_CONTROL, VK_LWIN, VK_RWIN = 0x20, 0x11, 0x5B, 0x5C
 ALT_KEYS = {0x12, 0xA4, 0xA5}
 LLKHF_INJECTED, LLKHF_ALTDOWN = 0x10, 0x20
-MASK_KEY = 0xE8  # a key code no keyboard has
+MASK_KEY = 0xE8  # unassigned virtual key
 KEYEVENTF_KEYUP = 0x2
 
 LRESULT = ctypes.c_ssize_t
@@ -43,9 +36,9 @@ user32.CallNextHookEx.argtypes = [ctypes.c_void_p, ctypes.c_int, wintypes.WPARAM
 user32.CallNextHookEx.restype = LRESULT
 kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 
-_state = {"down": False}  # Space is down as part of the talk key (its repeats and key-up are swallowed too)
+_state = {"down": False}
 _jobs: queue.Queue = queue.Queue()
-_proc = None  # kept so it isn't garbage-collected while Windows calls it
+_proc = None  # keep a reference so it isn't garbage-collected
 
 
 def _down(key: int) -> bool:
@@ -65,7 +58,7 @@ def _hook(code, wparam, lparam):
             if info.vkCode == VK_SPACE:
                 if down:
                     if _state["down"]:
-                        return 1  # the key repeating while held
+                        return 1
                     if info.flags & LLKHF_ALTDOWN and not (_down(VK_CONTROL) or _down(VK_LWIN) or _down(VK_RWIN)):
                         _state["down"] = True
                         _jobs.put("tap")
@@ -77,13 +70,13 @@ def _hook(code, wparam, lparam):
 
 
 def start(on_tap) -> bool:
-    """Call on_tap() each time the keys are pressed."""
+    """Call on_tap() on each press."""
     ready = threading.Event()
     result = {"ok": False}
 
     def run_hook():
         global _proc
-        _proc = HOOKPROC(_hook)  # (kept in the module, so it isn't garbage-collected)
+        _proc = HOOKPROC(_hook)
         hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, _proc, kernel32.GetModuleHandleW(None), 0)
         result["ok"] = bool(hook)
         ready.set()

@@ -1,9 +1,4 @@
-"""The setup page on the Mac (http://localhost:8000/setup): live checks for
-each step and a QR code to pair the phone.
-
-These routes only answer requests made on the Mac itself, never through the
-tunnel, because the phone link they show contains the secret token.
-"""
+"""Setup page (http://localhost:8000/setup), only served to the local machine."""
 
 import asyncio
 import os
@@ -21,7 +16,6 @@ from dock_server import bedrock, google_account, tunnel, webapp
 from dock_server.hub import AgentError, AgentOffline, Hub
 
 BEDROCK_CHECK_SECONDS = 120
-# Made by scripts/install.sh (Mac) or scripts/install.ps1 and the tray menu (Windows).
 LOGIN_ITEM = (Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs/Startup/OneDock.lnk"
               if sys.platform == "win32" else Path.home() / "Library/LaunchAgents/com.onedock.dock.plist")
 
@@ -37,7 +31,7 @@ def routes(hub: Hub, token: str, static_dir, calendar=None, downloads=None, mail
     async def check_bedrock() -> dict:
         if time.time() - bedrock_check["at"] > BEDROCK_CHECK_SECONDS:
             try:
-                await asyncio.to_thread(bedrock.ask, "Say OK", "Reply with OK.", 5)
+                await asyncio.to_thread(bedrock.ask, "Say OK", "Reply with OK.", 5, purpose="setup check")
                 bedrock_check.update(ok=True, error="")
             except Exception as e:
                 bedrock_check.update(ok=False, error=str(e)[:200])
@@ -60,8 +54,7 @@ def routes(hub: Hub, token: str, static_dir, calendar=None, downloads=None, mail
                 pass
         accessibility = allowed.get("accessibility")
         url = tunnel.public_url()
-        # The installed app's fixed address if it's ready (the token goes after "#",
-        # so it never reaches the web host); else the tunnel's own address.
+        # Prefer the hosted app's fixed address; the token goes after "#".
         if url and webapp.app_url():
             phone_url = f"{webapp.app_url()}#token={token}"
         else:
@@ -114,7 +107,7 @@ def routes(hub: Hub, token: str, static_dir, calendar=None, downloads=None, mail
     google_state = {"busy": False, "problem": ""}
 
     async def sign_in_google(request: Request):
-        """Open Google's sign-in page in the browser (Calendar and Gmail in one); the status shows when it's done."""
+        """Start Google sign-in."""
         if not _on_this_mac(request):
             return JSONResponse({"error": "forbidden"}, status_code=403)
         if not google_account.ready():
@@ -157,7 +150,6 @@ def routes(hub: Hub, token: str, static_dir, calendar=None, downloads=None, mail
         return JSONResponse({"ok": True})
 
     async def save_mail(request: Request):
-        """Email settings: who may reach you during focus, and the morning briefing."""
         if not _on_this_mac(request):
             return JSONResponse({"error": "forbidden"}, status_code=403)
         body = await request.json()

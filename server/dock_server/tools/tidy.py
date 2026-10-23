@@ -1,10 +1,7 @@
-"""Tidy the Downloads folder: suggest where each file belongs, ask about the
-unclear ones, and move files only after the user agrees (by voice/chat, or by
-ticking them on the phone). Moves can be undone. The MCP tools for all of
-this (and for single files and Save windows) are in downloads.py.
+"""Downloads tidy-up: suggest folders, ask about unclear files, move only after the user agrees.
 
-Every move is remembered in .data/moves.json (file name and folder only), so
-suggestions for new downloads can follow the user's own habits."""
+Moves can be undone and are logged in .data/moves.json to learn the user's habits.
+"""
 
 import asyncio
 import json
@@ -49,7 +46,7 @@ MOVES_KEPT = 200
 
 
 def past_moves(count: int = 30) -> list[dict]:
-    """The most recent moves: [{"file", "to"}, ...], newest last."""
+    """Recent moves, newest last."""
     return json.loads(MOVES_FILE.read_text())[-count:] if MOVES_FILE.exists() else []
 
 
@@ -79,10 +76,10 @@ def _parse_plan(answer: str, files: set[str], folders: set[str]) -> tuple[list[d
         file, to = str(move.get("file", "")), str(move.get("to", "")).strip("/")
         new_folder = bool(move.get("new_folder"))
         if new_folder and to in folders:
-            continue  # ("a new folder" in a folder, but no name for it: not sure, so leave the file)
+            continue
         if file in files and (to in folders or (new_folder and to.rsplit("/", 1)[0] in folders)):
             moves.append({"file": file, "to": to, "new_folder": new_folder and to not in folders, "why": str(move.get("why", ""))})
-    # Dock never deletes, so a question about deleting is left out even if the AI asks one.
+    # Dock never deletes files.
     questions = [str(q) for q in plan.get("questions", []) if not DELETE_WORDS.search(str(q))]
     return moves, questions[:3]
 
@@ -130,7 +127,7 @@ async def move_from_phone(hub: Hub, state: State, savings: Savings, message: dic
 
 
 async def plan(hub: Hub, state: State) -> str:
-    """Suggest a folder for each file in Downloads, plus questions. Moves nothing."""
+    """Suggest a folder for each file in Downloads. Moves nothing."""
     overview = await run_on_computer(hub, "downloads_overview", timeout=20)
     if not overview["files"]:
         return "Your Downloads folder is already empty."
@@ -142,26 +139,26 @@ async def plan(hub: Hub, state: State) -> str:
     past = "\n".join(f"- {m['file']} → {m['to']}" for m in past_moves()) or "(none yet)"
     prompt = (f"Downloaded files:\n{files}\n\nWhere the user put earlier files:\n{past}"
               "\n\nThe user's folders:\n" + "\n".join(overview["folders"]))
-    answer = await asyncio.to_thread(bedrock.ask, prompt, PLAN_SYSTEM, 1500, bedrock.SMART_MODEL_ID)
+    answer = await asyncio.to_thread(bedrock.ask, prompt, PLAN_SYSTEM, 1500, bedrock.SMART_MODEL_ID, purpose="tidy plan")
     moves, questions = _parse_plan(answer, {f["name"] for f in overview["files"]}, set(overview["folders"]))
     state.tidy_plan[:] = moves
+    state.tidy_plan_at = time.time()
     await hub.push_phone("plan", moves=moves, questions=questions)
 
     if not moves and not questions:
         return "I looked through your Downloads but I'm not sure where any of the files belong."
-    lines = [f"{n}. {m['file']} → {m['to']}" + (" (new folder)" if m["new_folder"] else "") + f" ({m['why']})"
-             for n, m in enumerate(moves, start=1)]
-    text = f"Suggested moves ({len(moves)} of {overview['total_files']} files in Downloads):\n" + "\n".join(lines)
+    count = len(moves)
+    text = f"I have {count} suggestion{'s' if count != 1 else ''} for your Downloads"
     if questions:
-        text += "\nQuestions for the user:\n" + "\n".join(f"- {q}" for q in questions)
-    return text + "\nNothing has been moved yet. The user can also tick suggestions on the phone."
+        text += f", and {'a question' if len(questions) == 1 else f'{len(questions)} questions'} on the card"
+    return text + ". Check the list, then tap Move selected or say yes."
 
 
 async def undo(hub: Hub) -> str:
-    """Put back the files Dock moved most recently."""
+    """Undo the most recent moves."""
     result = await run_on_computer(hub, "undo_moves")
     restored = result["restored"]
-    # The user didn't want those moves, so don't learn from them.
+    # Don't learn from undone moves.
     history = past_moves(MOVES_KEPT)
     for name in restored:
         for n in range(len(history) - 1, -1, -1):

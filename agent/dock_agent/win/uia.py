@@ -1,9 +1,5 @@
-"""UI Automation: Windows' way for helper apps (screen readers, and Dock) to
-see the buttons, menus and text inside other apps, the same idea as the Mac's
-Accessibility API. Through the `uiautomation` package.
-
-UI Automation is COM, so each thread starts it once (ready()), and a control
-found on one thread is only used on that thread.
+"""UI Automation helpers (via the `uiautomation` package). COM is initialized per
+thread with ready(), and controls stay on the thread that found them.
 """
 
 import threading
@@ -13,7 +9,7 @@ import uiautomation as auto
 
 auto.SetGlobalSearchTimeout(1)
 
-# Tree scopes and properties of IUIAutomation (uiautomation has no names for scopes).
+# IUIAutomation tree scopes and property ids.
 CHILDREN, DESCENDANTS = 2, 4
 NAME, CONTROL_TYPE, RECT, ENABLED, OFFSCREEN, ACCELERATOR, AUTOMATION_ID, PASSWORD = (
     30005, 30003, 30001, 30010, 30022, 30006, 30011, 30019)
@@ -45,7 +41,7 @@ def rect(control) -> tuple[int, int, int, int] | None:
 
 
 def pattern(control, name: str):
-    """A control pattern by name ("InvokePattern", "TextPattern"…), or None."""
+    """A control pattern by name, or None."""
     try:
         return control.GetPattern(getattr(auto.PatternId, name))
     except Exception:
@@ -60,7 +56,7 @@ def name_of(control) -> str:
 
 
 def press(control) -> bool:
-    """Do what clicking the control would: invoke, toggle, select or expand it."""
+    """Invoke, toggle, select or expand the control."""
     for name, act in (("InvokePattern", lambda p: p.Invoke(waitTime=0)),
                       ("TogglePattern", lambda p: p.Toggle(waitTime=0)),
                       ("SelectionItemPattern", lambda p: p.Select(waitTime=0)),
@@ -77,7 +73,7 @@ def press(control) -> bool:
 
 
 class Found:
-    """One element from a quick search, with its properties read in the same call."""
+    """Find one element, reading its properties in the same call."""
 
     def __init__(self, element):
         self.element = element
@@ -96,9 +92,7 @@ class Found:
 
 
 def find_all(control, scope: int = DESCENDANTS, max_seconds: float = 3.0) -> list[Found]:
-    """Every element under `control`, with their names, types and places read in
-    one go (asking one property at a time takes about a millisecond each, and
-    big windows have thousands of parts)."""
+    """All elements under `control`, with properties fetched in one cached request."""
     ready()
     automation = auto._AutomationClient.instance().IUIAutomation
     cache = automation.CreateCacheRequest()

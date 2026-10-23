@@ -1,6 +1,4 @@
-"""Recaps: which apps the user spent time in, which files they worked on,
-what they asked Dock, and how much time Dock saved them (see savings.py for
-how that's counted)."""
+"""Daily and weekly recaps: apps, files, questions asked and time saved."""
 
 import asyncio
 from datetime import date, timedelta
@@ -17,11 +15,11 @@ from dock_server.state import State
 from dock_server.tools.computer import run_on_computer
 
 RECAP_SYSTEM = (
-    "Write a friendly end-of-day recap for a student, to be spoken out loud: 3 or 4 short "
-    "sentences. Mention where most of their time went (rounded times), the main projects "
-    "or classes they worked on (guess from folder and file names), mention the time Dock saved "
-    "them if there is any, say briefly what's still on their list if anything, and end with one "
-    "short, encouraging suggestion. No markdown, lists, file paths or emojis."
+    "Write a short end-of-day recap for a student, to be spoken out loud: 2 short sentences, "
+    "under 35 words in all. Say what they mainly worked on (the project or class, guessed from "
+    "folder and file names) with a rounded time, the time Dock saved them if there is any, and "
+    "the next thing still on their list if anything. No greeting, no advice, no app-by-app list "
+    "(the card shows that). No markdown, lists, file paths or emojis."
 )
 
 
@@ -71,6 +69,6 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings, focus: Fo
         if notes.open_notes():
             lines.append("Still on their list: " + notes.spoken_list(notes.open_notes(), 3))
 
-        text = await asyncio.to_thread(bedrock.ask, "\n".join(lines), RECAP_SYSTEM, 300)
-        await hub.push_phone("recap", day=recap["day"], apps=recap["apps"][:6], files=recap["changed"][:6], summary=text)
+        text = await asyncio.to_thread(bedrock.ask, "\n".join(lines), RECAP_SYSTEM, 300, purpose="recap")
+        await hub.push_phone("recap", day=recap["day"], apps=recap["apps"][:6], summary=text)
         return text

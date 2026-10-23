@@ -1,41 +1,9 @@
-"""Email: "what did I miss?", cleaning up the inbox, one-tap unsubscribe,
-to-dos from email, and mail held during focus sessions. (The morning
-briefing, which uses it, is in briefing.py.)
+"""Email features: catch-up summaries, inbox clean-up, unsubscribe, to-dos from email,
+and holding mail during focus sessions.
 
-Gmail, connected by "Sign in with Google" in Dock's window (google_account.py,
-which connects Google Calendar too), and read through Gmail's IMAP with that
-sign-in (XOAUTH2), the same on Mac and Windows (Python's own imaplib). Google
-calls full mail access a restricted permission, so until Dock passes Google's
-review, users see "unverified app" once and at most 100 people can use it.
-Dock's own email settings (who gets through during focus) are in .data/mail.json.
-
-What Dock does with it:
-- Sorting: the AI sorts each email as important (a real person, or something
-  to know or act on: deadlines, plan changes, bills, security alerts, school,
-  work), update (receipts, shipping, notifications, newsletters), promotion
-  or spam. It only sees the sender, subject and the start of each email.
-- "What did I miss?" / "any new email?" (check_email): unread email since the
-  last focus session started (or today), summed up in a sentence or two,
-  only the important ones, the rest just counted; the list is on the phone.
-- To-dos from email: an important email that asks for something by a time
-  gets "Add it to your calendar?" (a button on the phone, or "yes"): an event
-  "Due: Submit HW4" ending at the deadline, with a reminder an hour before.
-  Without the Google Calendar sign-in (or without a time), it goes on Dock's
-  own list instead.
-- Unsubscribe ("unsubscribe from Old Navy", or a button on the clean-up list,
-  promotions only): the standard one-click unsubscribe when the sender
-  supports it (RFC 8058); otherwise the sender's unsubscribe page opens on the
-  Mac. Never for spam (that would tell spammers the address works), and never
-  by sending an email (Dock doesn't send email).
-- "Clean up my inbox" (clean_up_email): Dock proposes a checklist (spam and
-  promotions to the Trash, updates filed into folders like "Receipts") and
-  changes nothing until the user taps Clean up or says yes, like Tidy
-  Downloads. Trash isn't deleted right away (Gmail keeps it 30 days), and
-  only reading is done otherwise: the mailbox is opened read-only, so
-  nothing is marked as read.
-- During a focus session, mail is held: Dock stays quiet about it, except for
-  people on the "let through" list (no AI needed) and, from real people
-  (not newsletters), mail the AI calls urgent. Those get a card and a sound.
+Gmail is read over IMAP with the Google sign-in (XOAUTH2). The mailbox is opened
+read-only unless the user approves a clean-up. Dock never sends or replies to email.
+Settings are stored in .data/mail.json.
 """
 
 import asyncio
@@ -64,14 +32,18 @@ from dock_server.timefmt import strftime
 
 MAIL_FILE = DATA_DIR / "mail.json"
 GMAIL_IMAP = "imap.gmail.com"
-MAX_MESSAGES = 25         # the newest this many unread emails are summed up
-MAX_CLEANUP = 60          # clean-up looks at the newest this many emails...
-CLEANUP_DAYS = 30         # ...from the last this many days
-MAX_FULL_BYTES = 300_000  # bigger emails (attachments): only the headers are read
+# Inbox, or a Gmail label (labels are IMAP folders). Set by scripts/start.sh.
+MAIL_FOLDER = os.environ.get("DOCK_MAIL_FOLDER") or "INBOX"
+# With a test label, every email in it counts as new.
+DEMO = MAIL_FOLDER != "INBOX"
+MAX_MESSAGES = 25
+MAX_CLEANUP = 60
+CLEANUP_DAYS = 30
+MAX_FULL_BYTES = 300_000  # larger emails: headers only
 SNIPPET_CHARS = 300
-CHECK_SECONDS = 120       # how often mail is checked during a focus session
+CHECK_SECONDS = 120
 KINDS = ("important", "update", "promotion", "spam")
-SPOKEN_IMPORTANT = 4      # at most this many important emails are read out (the card lists more)
+SPOKEN_IMPORTANT = 2
 
 SORT_SYSTEM = (
     "You sort someone's email. For each email decide its kind:\n"
@@ -107,7 +79,7 @@ def _decode(value: str | None) -> str:
 
 
 def _text_of(message: email.message.Message) -> str:
-    """The start of the email's text (the plain part, or the HTML part without its tags)."""
+    """Start of the email's text (plain part, or HTML without tags)."""
     plain, html = "", ""
     for part in message.walk() if message.is_multipart() else [message]:
         kind = part.get_content_type()
@@ -134,13 +106,12 @@ def _json(answer: str) -> dict:
 
 
 def _folder_name(name: str) -> str:
-    """A safe, short folder name from the AI ("Receipts")."""
+    """A safe, short folder name."""
     name = re.sub(r"[^A-Za-z0-9 &-]", "", str(name)).strip()[:30]
     return name.title() if name else "Updates"
 
 
 def _counted(counts: dict) -> str:
-    """{"promotion": 9, "spam": 2} -> "9 promotions and 2 spam emails"."""
     words = {"update": ("update", "updates"), "promotion": ("promotion", "promotions"), "spam": ("spam email", "spam emails"),
              "important": ("important email", "important emails")}
     parts = [f"{n} {words[k][n != 1]}" for k, n in counts.items() if n]
@@ -148,8 +119,7 @@ def _counted(counts: dict) -> str:
 
 
 def _unsubscribe_info(message) -> dict:
-    """How to unsubscribe, from the List-Unsubscribe headers: a web address, and
-    whether it takes the standard one-click request (RFC 8058)."""
+    """Unsubscribe info from List-Unsubscribe headers: URL and RFC 8058 one-click support."""
     links = re.findall(r"<([^>]+)>", _decode(message["List-Unsubscribe"]))
     web = next((link for link in links if link.lower().startswith("https://")), "")
     one_click = "one-click" in str(message["List-Unsubscribe-Post"] or "").lower()
@@ -166,15 +136,18 @@ class Mail:
         self.focus = focus
         self.notes = notes
         self.calendar = calendar
-        self.offered_todos: list[dict] = []  # to-dos from email Dock offered to add: {"text", "due"}
-        self._seen_in_focus: set[str] = set()  # held emails Dock already looked at in this session
+        self.offered_todos: list[dict] = []
+        self._seen_in_focus: set[str] = set()
+        self._sorted: dict[str, dict] = {}  # model results by Message-ID
+        self.demo_read = None
+        self._read_before: dict[bytes, dict] = {}
         self._watching = False
-        self.plan: list[dict] = []  # the clean-up Dock proposed, waiting for a yes
+        self.plan: list[dict] = []  # pending clean-up, waiting for a yes
         old = self._settings()
-        if {"password", "address", "host", "google"} & set(old):  # (from the app-password sign-in: not used anymore)
+        if {"password", "address", "host", "google"} & set(old):
             self._save({k: v for k, v in old.items() if k not in ("password", "address", "host", "google")})
 
-    # ---- Settings ----
+    # ---- settings ----
 
     def _settings(self) -> dict:
         return json.loads(MAIL_FILE.read_text()) if MAIL_FILE.exists() else {}
@@ -189,7 +162,7 @@ class Mail:
 
     @property
     def connected(self) -> str:
-        """The signed-in Gmail address, or "" (not signed in, or Gmail wasn't allowed)."""
+        """The signed-in Gmail address, or ""."""
         return google_account.address() if google_account.has(google_account.MAIL) else ""
 
     @property
@@ -201,10 +174,9 @@ class Mail:
         self._set(let_through=people_list)
         return people_list
 
-    # ---- Reading ----
+    # ---- reading ----
 
     def _account(self, change: bool = False) -> imaplib.IMAP4_SSL:
-        """The inbox, opened with the Google sign-in."""
         address = self.connected
         if not address:
             raise ToolError(f"Your email isn't connected yet. Open Dock's settings on the {self.hub.computer} and sign in with Google.")
@@ -215,49 +187,85 @@ class Mail:
         except imaplib.IMAP4.error:
             box.logout()
             raise ValueError("Gmail didn't accept Dock's sign-in. Sign in with Google again in Dock's settings.")
-        # Read-only unless the user agreed to a clean-up: then nothing gets marked as read either.
-        box.select("INBOX", readonly=not change)
+        # Read-only unless a clean-up was approved.
+        status, _ = box.select(_quote(MAIL_FOLDER), readonly=not change)
+        if status != "OK":
+            box.logout()
+            raise ToolError(f"I can't find the {MAIL_FOLDER} label in Gmail.")
         return box
 
+    @staticmethod
+    def _fetch(box, uids: list[bytes], part: str) -> dict[bytes, bytes]:
+        """Fetch several emails in one round trip."""
+        if not uids:
+            return {}
+        data = box.uid("FETCH", b",".join(uids), f"({part})")[1]
+        found = {}
+        for n, item in enumerate(data):
+            head = item[0] if isinstance(item, tuple) else item
+            if not isinstance(head, bytes):
+                continue
+            after = data[n + 1] if isinstance(item, tuple) and n + 1 < len(data) and isinstance(data[n + 1], bytes) else b""
+            uid = re.search(rb"UID (\d+)", head) or re.search(rb"UID (\d+)", after)
+            if uid:
+                found[uid.group(1)] = item[1] if isinstance(item, tuple) else head
+        return found
+
     def _read(self, box, uids: list[bytes], since: datetime | None) -> list[dict]:
-        found = []
-        for uid in reversed(uids):  # (newest first)
-            size = box.uid("FETCH", uid, "(RFC822.SIZE)")[1][0]
-            size = int(re.search(rb"RFC822\.SIZE (\d+)", size).group(1)) if size else 0
-            part = "BODY.PEEK[]" if size <= MAX_FULL_BYTES else "BODY.PEEK[HEADER]"
-            data = box.uid("FETCH", uid, f"({part})")[1][0]
-            if not isinstance(data, tuple):
-                continue
-            message = email.message_from_bytes(data[1])
+        """Emails with these ids after `since`, newest first (cached by id)."""
+        new = [uid for uid in uids if uid not in self._read_before]
+        sizes = {uid: int(m.group(1)) if (m := re.search(rb"RFC822\.SIZE (\d+)", info)) else 0
+                 for uid, info in self._fetch(box, new, "RFC822.SIZE").items()}
+        small = [uid for uid in new if sizes.get(uid, 0) <= MAX_FULL_BYTES]
+        raw = {**self._fetch(box, small, "BODY.PEEK[]"),
+               **self._fetch(box, [uid for uid in new if uid not in small], "BODY.PEEK[HEADER]")}
+        for uid, data in raw.items():
+            message = email.message_from_bytes(data)
             when = email.utils.parsedate_to_datetime(message["Date"]) if message["Date"] else None
-            if since and when and when.astimezone().replace(tzinfo=None) < since:
-                continue
             name, address = email.utils.parseaddr(_decode(message["From"]))
-            found.append({
+            self._read_before[uid] = {
                 "uid": uid.decode(), "id": _decode(message["Message-ID"]) or uid.decode(),
                 "from": name or address, "address": address.lower(),
                 "subject": _decode(message["Subject"]) or "(no subject)",
                 "when": strftime(when.astimezone(), "%-I:%M %p") if when else "",
-                "text": _text_of(message) if size <= MAX_FULL_BYTES else "",
-                # Newsletters and notifications say how to unsubscribe; people don't.
+                "date": when.astimezone().isoformat(timespec="minutes") if when else "",
+                "text": _text_of(message) if sizes.get(uid, 0) <= MAX_FULL_BYTES else "",
                 "bulk": bool(message["List-Unsubscribe"] or message["List-Id"]),
                 **_unsubscribe_info(message),
-            })
+            }
+        found = []
+        for uid in reversed(uids):
+            m = self._read_before.get(uid)
+            if m and not (since and m["date"] and datetime.fromisoformat(m["date"]).replace(tzinfo=None) < since):
+                found.append(dict(m))
         return found
 
-    def unread_since(self, since: datetime) -> list[dict]:
-        """Unread emails that arrived after `since`, newest first."""
+    def unread_since(self, since: datetime, everything: bool = False) -> list[dict]:
+        """Unread emails after `since`, newest first. everything: all emails in the label."""
         with self._account() as box:
-            day = since.strftime("%d-%b-%Y")  # (IMAP only searches by day; the time is checked in _read)
+            if everything:
+                uids = box.uid("SEARCH", None, "ALL")[1][0].split()[-MAX_MESSAGES:]
+                return self._read(box, uids, None)
+            day = since.strftime("%d-%b-%Y")  # IMAP searches by day; the time is checked in _read
             uids = box.uid("SEARCH", None, "UNSEEN", "SINCE", day)[1][0].split()[-MAX_MESSAGES:]
             return self._read(box, uids, since)
 
     def unread_count(self, since: datetime) -> int:
         with self._account() as box:
+            if DEMO:
+                return len(box.uid("SEARCH", None, "ALL")[1][0].split())
             return len(box.uid("SEARCH", None, "UNSEEN", "SINCE", since.strftime("%d-%b-%Y"))[1][0].split())
 
+    def for_search(self, days: int, limit: int, known: set[str]) -> tuple[list[str], list[dict]]:
+        """Email ids from the last `days` days and full emails not in `known` (for search_my_stuff)."""
+        with self._account() as box:
+            day = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
+            uids = box.uid("SEARCH", None, "SINCE", day)[1][0].split()[-limit:]
+            new = [u for u in uids if u.decode() not in known]
+            return [u.decode() for u in uids], self._read(box, new, None)
+
     def recent(self) -> list[dict]:
-        """The newest MAX_CLEANUP emails of the last CLEANUP_DAYS days, read or not (for a clean-up)."""
+        """Newest emails from the last CLEANUP_DAYS days, for a clean-up."""
         with self._account() as box:
             day = (datetime.now() - timedelta(days=CLEANUP_DAYS)).strftime("%d-%b-%Y")
             uids = box.uid("SEARCH", None, "SINCE", day)[1][0].split()[-MAX_CLEANUP:]
@@ -275,18 +283,27 @@ class Mail:
         return today, "today"
 
     def sort(self, messages: list[dict]) -> list[dict]:
-        """Each email with its kind, gist, urgency and (updates) folder."""
+        """Classify emails (kind, gist, urgency, folder); results are cached."""
+        new = [m for m in messages if m["id"] not in self._sorted]
+        answers = dict(zip((m["id"] for m in new), self._sort_with_ai(new))) if new else {}
+        for key, about in answers.items():
+            if about.pop("answered"):
+                self._sorted[key] = about
+        return [{**m, **(self._sorted.get(m["id"]) or answers[m["id"]])} for m in messages]
+
+    def _sort_with_ai(self, messages: list[dict]) -> list[dict]:
         lines = [f"[E{n}] From: {m['from']} <{m['address']}>{' (automatic sender)' if m['bulk'] else ''}"
                  f" | Subject: {m['subject']}" + (f" | {m['text']}" if m["text"] else "") for n, m in enumerate(messages, start=1)]
         now = strftime(datetime.now(), "Now: %A, %B %-d, %Y, %-I:%M %p")
-        result = _json(bedrock.ask(now + "\n" + "\n".join(lines), SORT_SYSTEM, 300 + 70 * len(messages), bedrock.SMART_MODEL_ID))
+        result = _json(bedrock.ask(now + "\n" + "\n".join(lines), SORT_SYSTEM, 300 + 70 * len(messages), bedrock.SMART_MODEL_ID,
+                                     purpose="email sort"))
         about = {str(e.get("id", "")).upper(): e for e in result.get("emails", []) if isinstance(e, dict)}
         sorted_messages = []
         for n, m in enumerate(messages, start=1):
             e = about.get(f"E{n}", {})
-            # (Bills and security alerts come from automatic senders too, so "bulk" alone never decides.)
+            # Bills and security alerts come from automated senders too.
             kind = e.get("kind") if e.get("kind") in KINDS else ("update" if m["bulk"] else "important")
-            sorted_messages.append({**m, "kind": kind, "urgent": bool(e.get("urgent")) and kind == "important",
+            sorted_messages.append({"answered": bool(e), "kind": kind, "urgent": bool(e.get("urgent")) and kind == "important",
                                     "gist": str(e.get("gist", ""))[:80], "folder": _folder_name(e.get("folder", "")),
                                     "todo": str(e.get("todo") or "")[:90] if kind == "important" else "",
                                     "due": _due(e.get("due")) if kind == "important" and e.get("todo") else None})
@@ -298,43 +315,47 @@ class Mail:
 
     # ---- "What did I miss?" ----
 
-    async def new_mail(self, period: str = "auto") -> dict:
-        """The new email, sorted: {"said", "important" (urgent first), "counts", "rest",
-        "spoken" (one short line per important email, then the rest counted)}."""
+    async def new_mail(self, period: str = "auto", everything: bool = False) -> dict:
+        """New email, sorted: {"said", "important", "counts", "rest", "spoken"}."""
         since, said = self._since(period)
+        began = time.monotonic()
         try:
-            messages = await asyncio.to_thread(self.unread_since, since)
+            messages = await asyncio.to_thread(self.unread_since, since, everything)
         except ValueError as e:
             raise ToolError(str(e))
         except (OSError, imaplib.IMAP4.error) as e:
             raise ToolError(f"I couldn't reach your email right now ({str(e)[:60]}).")
+        fetched = time.monotonic()
         messages = await asyncio.to_thread(self.sort, messages) if messages else []
+        if time.monotonic() - began > 4:
+            print(f"Email was slow: Gmail {fetched - began:.1f}s, sorting {time.monotonic() - fetched:.1f}s")
         important = sorted((m for m in messages if m["kind"] == "important"), key=lambda m: not m["urgent"])
         counts = {k: sum(1 for m in messages if m["kind"] == k) for k in ("update", "promotion", "spam")}
         rest = _counted(counts)
-        # Said from the same sorting as the card, so they always agree.
         lines = [f"{m['from']}: {m['gist'] or m['subject']}." for m in important[:SPOKEN_IMPORTANT]]
         if len(important) > SPOKEN_IMPORTANT:
-            lines.append(f"And {len(important) - SPOKEN_IMPORTANT} more important.")
+            lines.append(f"And {len(important) - SPOKEN_IMPORTANT} more on your screen.")
+        # Only count updates and promotions, unless nothing important came in.
         if not messages:
             spoken = f"No new email {said}."
+        elif lines:
+            spoken = " ".join(lines)
         else:
-            spoken = " ".join(lines) or f"Nothing important {said}."
-            spoken = f"{spoken} Plus {rest}." if rest and important else f"{spoken} Just {rest}." if rest else spoken
-        # To-dos the important emails ask for: offered, never added without a yes.
-        # (Deadlines first, soonest first: those are the ones worth a calendar reminder.)
-        todos = [{"text": m["todo"], "due": m["due"]} for m in important if m["todo"]]
+            spoken = f"Nothing important {said}." + (f" Just {rest}." if rest else "")
+        # Offer to-dos from important emails (deadlines first, skip ones already listed).
+        listed = await asyncio.to_thread(lambda: [m["todo"] for m in important if m["todo"] and self.notes.is_listed(m["todo"])])
+        todos = [{"text": m["todo"], "due": m["due"]} for m in important if m["todo"] and m["todo"] not in listed]
         self.offered_todos = sorted(todos, key=lambda t: (t["due"] is None, t["due"][0] if t["due"] else datetime.max))[:3]
         offer = ""
         if self.offered_todos:
             first = self.offered_todos[0]
             text = first["text"][0].lower() + first["text"][1:] if first["text"][:2].istitle() else first["text"]
-            offer = (f"Want me to put {text} on your calendar, due {_when(first['due'])}?" if self._to_calendar(first)
-                     else f"Want me to add {text} to your list?")
+            offer = (f"Want a calendar reminder to {text}, due {_when(first['due'])}?" if self._to_calendar(first)
+                     else f"Want me to add a to-do to {text}?")
         return {"said": said, "important": important, "counts": counts, "rest": rest, "spoken": spoken, "offer": offer}
 
     def _to_calendar(self, todo: dict) -> bool:
-        """A to-do with a deadline goes on the calendar, when Dock may add events there."""
+        """Deadlines go on the calendar when Dock can add events."""
         return bool(todo.get("due")) and bool(self.calendar and self.calendar.can_add)
 
     def card_items(self, important: list[dict]) -> list[dict]:
@@ -347,7 +368,7 @@ class Mail:
         return items
 
     async def summary(self, period: str = "auto") -> str:
-        """Sum up the new email (spoken), and show the list on the phone."""
+        """Summarize new email and show the list on the phone."""
         found = await self.new_mail(period)
         important, counts, rest, said = found["important"], found["counts"], found["rest"], found["said"]
         if important or rest:
@@ -359,8 +380,7 @@ class Mail:
         return f"{found['spoken']} {found['offer']}".strip()
 
     async def add_todo(self, text: str = "") -> str:
-        """Add a to-do Dock offered from an email to the list, and with its deadline
-        to the calendar too (notes.py)."""
+        """Add an offered to-do to the list (and calendar, if it has a deadline)."""
         todo = next((t for t in self.offered_todos if t["text"] == text), None) if text else None
         todo = todo or (self.offered_todos[0] if self.offered_todos and not text else {"text": text, "due": None})
         if not todo["text"]:
@@ -373,7 +393,7 @@ class Mail:
             said += " Sign in with Google in Dock's settings and allow Calendar, and I can put these on your calendar too."
         return said
 
-    # ---- Cleaning up (always asks first) ----
+    # ---- clean-up (always asks first) ----
 
     async def propose_cleanup(self) -> str:
         try:
@@ -390,16 +410,12 @@ class Mail:
         await self.hub.push_phone("mail_plan", items=[{"from": m["from"], "subject": m["gist"] or m["subject"], "to": m["to"],
                                                        "kind": m["kind"], "can_unsubscribe": self._can_unsubscribe(m)}
                                                       for m in self.plan])
-        trash = {k: sum(1 for m in self.plan if m["kind"] == k) for k in ("promotion", "spam")}
-        filed = [m for m in self.plan if m["kind"] == "update"]
-        folders = list(dict.fromkeys(m["to"] for m in filed))[:2]
-        parts = [f"move {_counted(trash)} to the Trash"] if any(trash.values()) else []
-        if filed:
-            parts.append(f"file {len(filed)} update{'s' if len(filed) != 1 else ''} into folders like {' and '.join(folders)}")
-        return f"I'd {' and '.join(parts)}. Check the list, then tap Clean up or say yes."
+        count = len(self.plan)
+        return (f"I have {count} suggestion{'s' if count != 1 else ''} to clean up your inbox. "
+                "Check the list, then tap Clean up or say yes.")
 
     def _special(self, box, flag: str) -> str | None:
-        """The folder marked with a special-use flag, e.g. \\Trash -> "[Gmail]/Trash"."""
+        """Folder with a special-use flag, e.g. \\Trash -> "[Gmail]/Trash"."""
         for line in box.list()[1]:
             match = re.match(rb'\((?P<flags>[^)]*)\) (?:"[^"]*"|NIL) (?P<name>.+)', line or b"")
             if match and flag.encode().lower() in match["flags"].lower():
@@ -416,11 +432,11 @@ class Mail:
             for to, uids in groups.items():
                 folder = (self._special(box, "\\Trash") or "Trash") if to == "Trash" else to
                 if to != "Trash" or folder == "Trash":
-                    box.create(_quote(folder))  # (fails harmlessly if it's already there)
+                    box.create(_quote(folder))
                 uid_set = ",".join(uids)
                 if can_move:
                     box.uid("MOVE", uid_set, _quote(folder))
-                else:  # older servers: copy, then mark the original deleted
+                else:  # older servers: copy, then mark deleted
                     box.uid("COPY", uid_set, _quote(folder))
                     box.uid("STORE", uid_set, "+FLAGS", "(\\Deleted)")
                     box.expunge()
@@ -428,7 +444,7 @@ class Mail:
         return moved
 
     async def clean_up(self, numbers: list[int] | None = None) -> str:
-        """Do the proposed clean-up (all of it, or only the items the user left ticked)."""
+        """Apply the proposed clean-up (all, or only the ticked items)."""
         if not self.plan:
             raise ToolError("I haven't suggested a clean-up yet. Say clean up my inbox first.")
         picked = self.plan if numbers is None else [self.plan[n] for n in numbers if 0 <= n < len(self.plan)]
@@ -446,14 +462,14 @@ class Mail:
         parts = ([f"{trashed} to the Trash"] if trashed else []) + ([f"{filed} filed into {', '.join(moved)}"] if filed else [])
         return f"Done: {' and '.join(parts)}." + (" The Trash keeps them for a while if you need one back." if trashed else "")
 
-    # ---- Unsubscribe (promotions only, never by sending an email) ----
+    # ---- unsubscribe (promotions only) ----
 
     @staticmethod
     def _can_unsubscribe(m: dict) -> bool:
         return m.get("kind") != "spam" and bool(m.get("unsubscribe_url"))
 
     async def unsubscribe(self, m: dict) -> str:
-        """One-click unsubscribe if the sender supports it, else open their page on the Mac."""
+        """One-click unsubscribe if supported, else open the sender's page."""
         if m.get("kind") == "spam":
             return f"That one looks like spam. Unsubscribing would tell them your address works, so I'll leave it."
         url = m.get("unsubscribe_url", "")
@@ -475,7 +491,7 @@ class Mail:
         return f"I opened {m['from']}'s unsubscribe page on your {self.hub.computer}. Confirm there."
 
     def find_sender(self, sender: str) -> dict | None:
-        """The newest email of the last CLEANUP_DAYS days from a sender (by name or address)."""
+        """Newest recent email from a sender (by name or address)."""
         wanted = sender.lower().strip()
         matches = [m for m in self.recent() if wanted in m["from"].lower() or wanted in m["address"]]
         return next((m for m in matches if m["unsubscribe_url"]), matches[0] if matches else None)
@@ -509,12 +525,22 @@ class Mail:
             self.plan = []
             await self.hub.push_phone("mail_plan_done")
 
-    # ---- During focus: hold mail, let the important ones through ----
+    # ---- focus: hold mail, let important mail through ----
 
     def ensure_watch(self) -> None:
         if not self._watching:
             self._watching = True
             asyncio.get_running_loop().create_task(self._watch())
+            if DEMO and self.connected:
+                asyncio.get_running_loop().create_task(self._sort_demo_emails())
+
+    async def _sort_demo_emails(self) -> None:
+        """With a test label, sort its emails once at startup."""
+        try:
+            self.demo_read = await self.new_mail("today", everything=True)
+            print("Demo emails sorted")
+        except Exception as e:
+            print(f"Couldn't sort the demo emails yet: {e!r}")
 
     async def _watch(self) -> None:
         session_id = None
@@ -523,7 +549,7 @@ class Mail:
             s = self.focus.session
             if not self.connected or not s or s["state"] not in ("running", "away", "paused"):
                 continue
-            if s["started"] != session_id:  # a new session: start a new held list
+            if s["started"] != session_id:
                 session_id, self._seen_in_focus = s["started"], set()
             try:
                 messages = await asyncio.to_thread(self.unread_since, datetime.fromtimestamp(s["started"]))
@@ -539,7 +565,7 @@ class Mail:
                     why = "On your let-through list"
                 elif not m["bulk"]:
                     verdict = _json(await asyncio.to_thread(
-                        bedrock.ask, f"From: {m['from']}\nSubject: {m['subject']}\n{m['text']}", URGENT_SYSTEM, 60))
+                        bedrock.ask, f"From: {m['from']}\nSubject: {m['subject']}\n{m['text']}", URGENT_SYSTEM, 60, purpose="email urgency"))
                     why = f"Looks urgent: {verdict.get('why', '')}".strip(": ") if verdict.get("urgent") else ""
                 if why:
                     print(f"Mail let through during focus: {m['from']} ({why})")
@@ -548,7 +574,7 @@ class Mail:
     def held_count(self) -> int:
         return len(self._seen_in_focus)
 
-    # ---- Tools ----
+    # ---- tools ----
 
     def register(self, mcp: MCPServer) -> None:
         @mcp.tool()

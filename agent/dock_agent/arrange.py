@@ -1,12 +1,6 @@
-"""Arrange windows by voice: "Chrome on the left and my notes on the right",
-"make this full screen", "move this to my other screen", "hide everything
-but this".
+"""Arrange windows by voice ("Chrome on the left, notes on the right", "full screen").
 
-Moves and sizes each app's front window with Accessibility. Places are parts
-of the screen's usable area (below the menu bar and beside the macOS Dock).
-An app that isn't open yet is opened first.
-
-Windows: SetWindowPos with the monitor's work area (docs/WINDOWS-PORT.md).
+Uses Accessibility to move and size each app's front window within the usable screen area.
 """
 
 import os
@@ -15,6 +9,7 @@ import time
 from AppKit import NSBundle, NSRunningApplication, NSScreen, NSWorkspace
 from ApplicationServices import (
     AXUIElementCreateApplication,
+    AXUIElementPerformAction,
     AXUIElementSetAttributeValue,
     AXValueCreate,
     kAXValueCGPointType,
@@ -24,7 +19,7 @@ from Quartz import CGPoint, CGSize
 
 from dock_agent import apps, menus
 
-# (left, top, width, height) as parts of the screen.
+# (left, top, width, height) as fractions of the screen.
 PLACES = {
     "left": (0, 0, 1 / 2, 1), "right": (1 / 2, 0, 1 / 2, 1),
     "top": (0, 0, 1, 1 / 2), "bottom": (0, 1 / 2, 1, 1 / 2),
@@ -34,8 +29,8 @@ PLACES = {
     "top left": (0, 0, 1 / 2, 1 / 2), "top right": (1 / 2, 0, 1 / 2, 1 / 2),
     "bottom left": (0, 1 / 2, 1 / 2, 1 / 2), "bottom right": (1 / 2, 1 / 2, 1 / 2, 1 / 2),
 }
-GAP = 4  # points between windows, so their edges don't overlap
-KEEP = "as is"  # leave the window where it is (just bring it forward): "hide everything except VS Code"
+GAP = 4  # gap between windows
+KEEP = "as is"  # bring forward without moving
 
 
 class ArrangeError(Exception):
@@ -43,12 +38,12 @@ class ArrangeError(Exception):
 
 
 def _running(name: str):
-    """The running app for a spoken name ("" or "this" = the app in front), opening it if needed."""
+    """Running app for a spoken name ("" or "this" = front app), opening it if needed."""
     workspace = NSWorkspace.sharedWorkspace()
     if name.strip().lower() in ("", "this", "this app", "this window", "it"):
         return workspace.frontmostApplication()
     found = apps.find_app(name)
-    # Only a close match ("chrome" for Google Chrome), never a guess ("Photoshop" must not open Photos).
+    # Close matches only, never a guess.
     target = apps._norm(name)
     if found is None or not (apps._norm(found[0]).startswith(target) or target in apps.ALIASES
                              or any(apps._norm(word).startswith(target) for word in found[0].split())):
@@ -56,13 +51,13 @@ def _running(name: str):
     app_name, path = found
     bundle_id = NSBundle.bundleWithPath_(str(path)).bundleIdentifier()
 
-    def running():  # (asked fresh each time: the workspace's own list can lag behind)
+    def running():
         found = NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id) if bundle_id else []
         return found[0] if found else None
 
     if running() is None:
         apps.open_app(app_name)
-        for _ in range(80):  # wait up to 8 s for it to start
+        for _ in range(80):
             time.sleep(0.1)
             if running() is not None:
                 break
@@ -72,7 +67,7 @@ def _running(name: str):
 
 
 def _window(app):
-    """The app's front window (waiting a moment for a just-opened app)."""
+    """The app's front window."""
     element = AXUIElementCreateApplication(app.processIdentifier())
     for _ in range(30):
         window = menus._get(element, "AXFocusedWindow") or menus._get(element, "AXMainWindow")
@@ -86,7 +81,7 @@ def _window(app):
 
 
 def _screens() -> list[tuple[float, float, float, float]]:
-    """Each screen's usable area as (x, y, width, height) from the top-left of the main screen."""
+    """Usable area of each screen as (x, y, width, height), top-left origin."""
     main_height = NSScreen.screens()[0].frame().size.height
     areas = []
     for screen in NSScreen.screens():
@@ -110,14 +105,79 @@ def _move(window, rect) -> None:
     position = AXValueCreate(kAXValueCGPointType, CGPoint(x, y))
     AXUIElementSetAttributeValue(window, "AXPosition", position)
     AXUIElementSetAttributeValue(window, "AXSize", AXValueCreate(kAXValueCGSizeType, CGSize(w, h)))
-    AXUIElementSetAttributeValue(window, "AXPosition", position)  # (some apps move it back after a resize)
+    AXUIElementSetAttributeValue(window, "AXPosition", position)  # some apps move it back after a resize
+
+
+def _open_app_named(name: str):
+    """Running app for a spoken name, without opening anything."""
+    workspace = NSWorkspace.sharedWorkspace()
+    if name.strip().lower() in ("", "this", "this app", "this window", "it"):
+        return workspace.frontmostApplication()
+    found = apps.find_app(name)
+    bundle_id = NSBundle.bundleWithPath_(str(found[1])).bundleIdentifier() if found else None
+    running = NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id) if bundle_id else []
+    if not running:
+        raise ArrangeError(f"{found[0] if found else name} isn't open.")
+    return running[0]
+
+
+def close_windows(app: str = "", which: str = "front") -> dict:
+    """Close windows with their own close button. which: "front" or "all"; app "all" = every app.
+    Unsaved documents still prompt to save.
+    """
+    if not menus.check_permission():
+        raise ArrangeError("Dock needs the Accessibility permission to close windows.")
+    if app.strip().lower() in ("all", "everything", "every app", "all apps"):
+        targets = [a for a in NSWorkspace.sharedWorkspace().runningApplications()
+                   if a.activationPolicy() == 0 and a.processIdentifier() != os.getpid()]
+        which = "all"
+    else:
+        targets = [_open_app_named(app)]
+    closed, names = 0, []
+    for target in targets:
+        windows = [w for w in menus._get(AXUIElementCreateApplication(target.processIdentifier()), "AXWindows") or []
+                   if menus._get(w, "AXRole") == "AXWindow"]
+        if which != "all":
+            windows = windows[:1]
+        count = 0
+        for window in windows:
+            button = menus._get(window, "AXCloseButton")
+            if button is not None:
+                AXUIElementPerformAction(button, "AXPress")
+                count += 1
+        if count:
+            closed += count
+            names.append(str(target.localizedName()))
+    return {"closed": closed, "apps": names}
+
+
+def clear_screen() -> dict:
+    """Show the desktop: hide every app and minimize Finder windows."""
+    workspace = NSWorkspace.sharedWorkspace()
+    finder = next((a for a in workspace.runningApplications() if a.bundleIdentifier() == "com.apple.finder"), None)
+    if finder is not None:
+        finder.activateWithOptions_(0)
+        time.sleep(0.2)
+    hidden = 0
+    for app in workspace.runningApplications():
+        if (app.activationPolicy() == 0 and app != finder and app.processIdentifier() != os.getpid()
+                and not app.isHidden()):
+            app.hide()
+            hidden += 1
+    if finder is not None:
+        for window in menus._get(AXUIElementCreateApplication(finder.processIdentifier()), "AXWindows") or []:
+            if menus._get(window, "AXRole") == "AXWindow" and not menus._get(window, "AXMinimized"):
+                AXUIElementSetAttributeValue(window, "AXMinimized", True)
+                hidden += 1
+    return {"cleared": hidden}
 
 
 def arrange(layout: list[dict], screen: str = "this", hide_others: bool = False) -> dict:
-    """layout: [{"app": "Chrome", "place": "left"}, ...]; app "" means the app in front.
-    screen: "this" (where the first window is), "other" (the next screen) or "main"."""
+    """layout: [{"app": "Chrome", "place": "left"}, ...]. screen: "this", "other" or "main"."""
     if not menus.check_permission():
         raise ArrangeError("Dock needs the Accessibility permission to move windows.")
+    if hide_others and not layout:
+        return {**clear_screen(), "arranged": [], "problems": [], "screens": len(_screens())}
     screens = _screens()
     done, problems, keep = [], [], set()
     target = None
@@ -139,7 +199,7 @@ def arrange(layout: list[dict], screen: str = "this", hide_others: bool = False)
             continue
         if menus._get(window, "AXFullScreen"):
             AXUIElementSetAttributeValue(window, "AXFullScreen", False)
-            time.sleep(1.0)  # leaving full screen animates
+            time.sleep(1.0)
         if target is None:
             here = _screen_of(menus._rect(window))
             target = {"other": (here + 1) % len(screens), "main": 0}.get(screen, here)

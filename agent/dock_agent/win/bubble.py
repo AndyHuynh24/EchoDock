@@ -1,19 +1,7 @@
-"""Dock's windows on Windows, so Dock works without a phone (the same as
-dock_agent/bubble.py on the Mac):
+"""Dock's Windows UI: the bubble above the taskbar, the chat box, and the welcome window.
 
-- the bubble: a small see-through window at the bottom right, above the
-  taskbar, that shows Dock's cards. It is the phone app's own page in desktop
-  mode ("?screen=mac"), so every card and button works the same everywhere.
-  It never takes the keyboard from your app, so "Save here" still works
-  while a Save window is open.
-- the chat box: "Ask Dock" (a click on the tray icon) opens an "Ask Dock…" box
-  at the top of the bubble. Only then does the bubble take the keyboard; it
-  closes when you click elsewhere or press Esc.
-- the welcome window: the setup page (AI, try it, add a phone, settings).
-
-Shown with WebView2 (Microsoft Edge's engine, part of Windows 10 and 11) via
-pywebview. The page talks to this file through window.pywebview.api.post(),
-with the same messages as on the Mac (see dock_agent/bubble.py).
+Shown with WebView2 via pywebview; the page posts the same messages as on the Mac
+through window.pywebview.api.post().
 """
 
 import json
@@ -30,19 +18,19 @@ import win32gui
 from dock_agent.win import voice_out, winapi
 
 WIDTH = 400
-GAP = 12           # from the taskbar and the screen edge
+GAP = 12
 TITLE = "OneDock bubble"
 
 _window = None
 _welcome = None
 _hwnd = 0
 _composing = False
-_ready = False     # the page has loaded and can show the chat box
-_closed_at = 0.0   # when the chat box last closed by itself
+_ready = False
+_closed_at = 0.0  # when the chat box last closed itself
 _calls: queue.Queue = queue.Queue()
-on_focus = None    # set by main.py: gets the focus countdown text for the tray icon
-on_listen = None   # set by main.py: the chat box's microphone button (talk.toggle)
-on_cancel = None   # set by main.py: stop listening without sending (talk.cancel)
+on_focus = None
+on_listen = None
+on_cancel = None
 
 
 def _server() -> str:
@@ -54,7 +42,7 @@ def _url() -> str:
 
 
 class Api:
-    """Messages from the bubble's page."""
+    """Messages from the page."""
 
     def post(self, data):
         try:
@@ -91,7 +79,7 @@ def _handle(data: dict) -> None:
 
 
 def create() -> None:
-    """Make the bubble (hidden until there's a card). Before webview.start()."""
+    """Create the bubble (hidden until there's a card). Call before webview.start()."""
     global _window
     _window = webview.create_window(
         TITLE, _url(), js_api=Api(), width=WIDTH, height=120, min_size=(100, 20), resizable=False,
@@ -100,7 +88,7 @@ def create() -> None:
 
 
 def started() -> None:
-    """Once the window exists (webview.start's function): find it and keep the page loaded."""
+    """Find the window once it exists and keep the page loaded."""
     global _hwnd
     for _ in range(100):
         _hwnd = win32gui.FindWindow(None, TITLE)
@@ -113,7 +101,7 @@ def started() -> None:
 
 
 def _keep_loaded() -> None:
-    """If the page didn't load (the server was still starting), try again."""
+    """Retry while the server is still starting."""
     while True:
         time.sleep(5)
         if not _ready and _window is not None:
@@ -141,7 +129,7 @@ def _place(show: bool, height: float) -> None:
         win32gui.ShowWindow(_hwnd, win32con.SW_HIDE)
         return
     scale = winapi.scale()
-    x, y, w, h = winapi.screens()[0]["area"]  # above the taskbar
+    x, y, w, h = winapi.screens()[0]["area"]
     width, height = round(WIDTH * scale), round(min(height * scale, h * 0.8))
     left, top = x + w - width - round(GAP * scale), y + h - height - round(GAP * scale)
     win32gui.SetWindowPos(_hwnd, win32con.HWND_TOPMOST, left, top, width, height,
@@ -149,7 +137,7 @@ def _place(show: bool, height: float) -> None:
 
 
 def _focus_page() -> None:
-    """Give the keyboard to the page inside the window (WinForms keeps it on the window)."""
+    """Focus the page inside the window (WinForms keeps focus on the window)."""
     try:
         from System import Func, Type
         form = _window.native
@@ -159,16 +147,16 @@ def _focus_page() -> None:
 
 
 def compose(open_it: bool | None = None) -> None:
-    """Open or close the chat box (None: switch)."""
+    """Open or close the chat box (None toggles)."""
     global _composing, _closed_at
     if open_it is None and not _composing and time.time() - _closed_at < 0.4:
-        return  # this click on the tray icon is what just closed it
+        return
     if not _ready and not _composing:
-        return  # (the page isn't there yet)
+        return
     _composing = (not _composing) if open_it is None else open_it
     call(f"macCompose({'true' if _composing else 'false'})")
     if _composing:
-        for _ in range(20):  # (the page shows and sizes the bubble for the box first)
+        for _ in range(20):
             if win32gui.IsWindowVisible(_hwnd):
                 break
             time.sleep(0.05)
@@ -177,8 +165,7 @@ def compose(open_it: bool | None = None) -> None:
         return
     _closed_at = time.time()
     if winapi.foreground() == _hwnd:
-        # Give the keyboard back to the user's app; the page shows the bubble
-        # again if cards are still on it.
+        # Give the keyboard back to the user's app.
         from dock_agent.win import menus
         _, pid = menus.front_app()
         winapi.bring_forward(winapi.window_of(pid))
@@ -187,27 +174,26 @@ def compose(open_it: bool | None = None) -> None:
 
 
 def _watch_keyboard() -> None:
-    """Clicked somewhere else while the chat box is open: close it."""
+    """Close the chat box when focus moves elsewhere."""
     while True:
         time.sleep(0.2)
         if _composing and time.time() - _closed_at > 0.6 and _hwnd and winapi.foreground() != _hwnd:
-            time.sleep(0.3)  # (opening it moves the keyboard over a moment later)
+            time.sleep(0.3)
             if _composing and winapi.foreground() != _hwnd:
                 compose(False)
 
 
 def just_closed() -> bool:
-    """Did the chat box close by itself a moment ago (so this click on the tray icon is what closed it)?"""
+    """Whether the chat box just closed itself."""
     return not _composing and time.time() - _closed_at < 0.4
 
 
 def has_keyboard() -> bool:
-    """Is the chat box open and taking the keyboard?"""
     return _composing and bool(_hwnd) and winapi.foreground() == _hwnd
 
 
 def call(script: str) -> None:
-    """Run JavaScript in the bubble's page. Safe from any thread."""
+    """Run JavaScript in the page. Safe from any thread."""
     _calls.put(script)
 
 
@@ -220,7 +206,7 @@ def ask(text: str) -> None:
 
 
 def show_welcome(part: str = "") -> None:
-    """Open the welcome/setup window (part="phone" jumps to adding a phone)."""
+    """Open the welcome window (part="phone" jumps to adding a phone)."""
     global _welcome
     url = f"{_server()}/setup?app=1" + (f"#{part}" if part else "")
     if _welcome is not None:

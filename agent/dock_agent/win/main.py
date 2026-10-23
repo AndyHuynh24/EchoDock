@@ -1,11 +1,8 @@
-"""Dock desktop agent for Windows. Connects out to the Dock server, waits for
-jobs, runs them, and sends back the result. Reconnects automatically. (The
-same as dock_agent/main.py on the Mac.)
+"""Windows desktop agent entry point (scripts\\start.ps1 runs it).
 
-Run it from the agent folder:  .venv\\Scripts\\python -m dock_agent.win.main
-(scripts\\start.ps1 does this.) Settings (environment variables):
-  DOCK_SERVER  e.g. ws://localhost:8000 (default)
-  DOCK_TOKEN   the same token the server uses
+    .venv\\Scripts\\python -m dock_agent.win.main
+
+Environment: DOCK_SERVER (default ws://localhost:8000), DOCK_TOKEN.
 """
 
 import json
@@ -42,7 +39,7 @@ def handle(job: dict) -> dict:
 
 
 def stay_connected(server: str, url: str) -> None:
-    """Connect to the server, run the jobs it sends, and reconnect if the connection drops."""
+    """Run jobs from the server, reconnecting when the connection drops."""
     uia.ready()
     while True:
         try:
@@ -66,7 +63,7 @@ def stay_connected(server: str, url: str) -> None:
 
 
 def _started(server: str, url: str) -> None:
-    """Runs once the bubble window exists (webview.start keeps the main thread)."""
+    """Runs once the bubble window exists."""
     bubble.on_focus = tray.set_focus
     bubble.on_listen = talk.toggle
     bubble.on_cancel = talk.cancel

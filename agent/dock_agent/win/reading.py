@@ -1,14 +1,7 @@
-"""Get the text the user means by "read this" or "fix this", and put
-improved text back, on Windows (the same answers as dock_agent/reading.py):
+"""Selected or document text on Windows, and writing improved text back.
 
-1. Text selected in the app in front (asked through UI Automation).
-2. If the app doesn't share that, copy the selection with Ctrl+C and read the
-   clipboard. The clipboard is put back as it was afterwards.
-3. Otherwise, the text in the window (Notepad, Word, a web page's text box…).
-
-Writing goes through the clipboard (Ctrl+V), because UI Automation can only
-replace a text box's whole text, not the selection; the clipboard is put back
-after. The app's own Undo (Ctrl+Z) undoes it.
+Reads via UI Automation, falling back to a Ctrl+C copy. Writes by pasting, since UI
+Automation can't replace just the selection. The clipboard is always restored.
 """
 
 import html
@@ -34,7 +27,7 @@ class ReadError(Exception):
     pass
 
 
-# ---- Files ----
+# ---- files ----
 
 def _xml_text(xml: str) -> str:
     xml = re.sub(r"</(w:p|text:p|text:h|a:p)>", "\n", xml)
@@ -42,7 +35,7 @@ def _xml_text(xml: str) -> str:
 
 
 def _rtf_text(rtf: str) -> str:
-    rtf = re.sub(r"\{\\\*[^{}]*\}", "", rtf)                 # hidden groups
+    rtf = re.sub(r"\{\\\*[^{}]*\}", "", rtf)
     rtf = re.sub(r"\\par[d]?\b ?", "\n", rtf)
     rtf = re.sub(r"\\'([0-9a-f]{2})", lambda m: bytes.fromhex(m.group(1)).decode("cp1252"), rtf)
     rtf = re.sub(r"\\[a-z]+-?\d* ?|[{}]", "", rtf)
@@ -81,10 +74,10 @@ def file_text(path: str) -> str:
     return text
 
 
-# ---- The selection ----
+# ---- selection ----
 
 def _text_pattern(control):
-    """The control's text pattern, or its parent's (the focus is often inside the document)."""
+    """Text pattern of the control or its parent."""
     for _ in range(4):
         if control is None:
             return None
@@ -99,7 +92,7 @@ def _text_pattern(control):
 
 
 def selected_by_uia() -> str:
-    """The selected text, asked through UI Automation only (nothing is copied)."""
+    """Selected text via UI Automation (nothing copied)."""
     try:
         found = _text_pattern(uia.focused())
         ranges = found.GetSelection() if found is not None else []
@@ -109,7 +102,7 @@ def selected_by_uia() -> str:
 
 
 def _copy_selection() -> str:
-    """Press Ctrl+C, read the copied text, then put the clipboard back."""
+    """Copy with Ctrl+C, read the clipboard, then restore it."""
     saved = winapi.save_clipboard()
     before = winapi.clipboard_number()
     winapi.keys(win32con.VK_CONTROL, ord("C"))
@@ -118,7 +111,7 @@ def _copy_selection() -> str:
         if winapi.clipboard_number() != before:
             break
     if winapi.clipboard_number() == before:
-        return ""  # nothing was selected
+        return ""
     text = winapi.clipboard_text()
     winapi.restore_clipboard(saved)
     return text
@@ -135,24 +128,23 @@ def selection() -> dict:
 
 
 def replace_selection(pid: int, text: str) -> str:
-    """Paste `text` over the selection (and put the clipboard back)."""
+    """Paste `text` over the selection, then restore the clipboard."""
     saved = winapi.save_clipboard()
     winapi.set_clipboard_text(text)
     winapi.keys(win32con.VK_CONTROL, ord("V"))
-    time.sleep(0.6)  # (let the app take the paste before the clipboard goes back)
+    time.sleep(0.6)
     winapi.restore_clipboard(saved)
     return "paste"
 
 
 def insert_after_selection(pid: int, text: str) -> str:
-    """Put `text` under the selection, leaving the selected text as it is. (The
-    right arrow moves the cursor to the end of a selection in any Windows text box.)"""
+    """Insert `text` below the selection, leaving it unchanged."""
     winapi.keys(win32con.VK_RIGHT)
     time.sleep(0.1)
     return replace_selection(pid, text)
 
 
-# ---- The window's text ----
+# ---- window text ----
 
 def _text_of(control, limit: int) -> str:
     found = uia.pattern(control, "TextPattern")
@@ -171,9 +163,7 @@ def _text_of(control, limit: int) -> str:
 
 
 def window_text(pid: int, limit: int = WINDOW_TEXT_CHARS) -> str:
-    """The text in the app's window: its biggest document or text box (Notepad,
-    Word, Mail…), e.g. behind its Save window, so Dock can suggest a folder
-    from what it's about."""
+    """Text of the window's largest document or text box."""
     window = uia.window(winapi.window_of(pid))
     if window is None:
         return ""

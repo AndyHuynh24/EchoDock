@@ -9,7 +9,7 @@
 | Protocol | MCP **2025-11-25** (checked: `initialize` returns `"protocolVersion":"2025-11-25"`) |
 | Transport | **Streamable HTTP** at `/mcp`, stateless, JSON responses |
 | SDK | Official MCP Python SDK 2.3.0 (`mcp.server.MCPServer`) |
-| Tools | **28**, in 6 groups (below) |
+| Tools | **30**, in 7 groups (below) |
 | Auth | Bearer token on `/mcp` (no token: HTTP 401) |
 | MCP client used in the demo | Simulated Alexa+: the phone web page → an Amazon Bedrock agent (Claude Haiku 4.5) that calls `initialize`, `tools/list` and `tools/call` on `/mcp` over Streamable HTTP, exactly like Alexa+ would |
 | Speed | Menu answers in under 1 s. A full spoken turn from the phone takes about 1–1.5 s |
@@ -30,7 +30,7 @@
 ### How this fits the judging criteria
 | Criterion | What Dock shows |
 |---|---|
-| **Tech implementation** | A real MCP server on spec 2025-11-25 with Streamable HTTP. A real MCP client (the Bedrock agent) drives it. Its 28 tools reach the Mac through an outbound WebSocket to a desktop agent (PyObjC + Accessibility API) |
+| **Tech implementation** | A real MCP server on spec 2025-11-25 with Streamable HTTP. A real MCP client (the Bedrock agent) drives it. Its 30 tools reach the Mac through an outbound WebSocket to a desktop agent (PyObjC + Accessibility API) |
 | **Design** | Answers you hear, an arrow on screen, and the phone as a second screen, so nothing covers your work. "Try saying…" chips show new users what to ask. Every reply is one or two short spoken sentences |
 | **Potential impact** | Anyone who learns new software: students in RStudio, creators in iMovie, office workers. It works in any Mac app with menus, and it's free to run apart from about $0.001 per AI request |
 | **Quality of the idea** | It matches the creative directions the hackathon lists: **agentic workflows** (multi-step requests, email clean-up, writing suggestions), **state across sessions** (workspaces, reminders, focus history), and **cards** (phone and Mac cards, shortcut pad, focus report) |
@@ -44,7 +44,7 @@
                     │  POST /api/voice
                     ▼
           Bedrock agent = MCP client ──Streamable HTTP──▶  Dock MCP server  /mcp
-          (Haiku 4.5 picks tools)     initialize,          28 tools, state, Bedrock
+          (Haiku 4.5 picks tools)     initialize,          30 tools, state, Bedrock
                     ▲                 tools/list,                │
                     │ spoken reply    tools/call                 │ WebSocket (the agent dials out)
                     │                                            ▼
@@ -59,7 +59,7 @@
 
 ---
 
-## The 28 tools
+## The 30 tools
 (Merged from 32 to 20 on Oct 16, so the AI has fewer look-alike tools to choose from; everyday tools were added since, and voice macros were removed on Oct 17. In a 97-phrase routing test, all 97 pick the right tool.)
 
 ### Help inside apps
@@ -81,6 +81,7 @@
 | Tool | Say | What happens |
 |---|---|---|
 | `arrange_windows(layout, screen, hide_others)` | "Put Chrome on the left and Notes on the right" / "make this full screen" / "move this to my other screen" | Moves and sizes windows (halves, thirds, quarters, full), opens apps that aren't open yet, never guesses an app you don't have |
+| `close_windows(app, which)` | "Close this window" / "close all the Finder windows" / "close all windows" | Closes windows with their own close button; unsaved documents still ask to save (Mac only for now) |
 | `notes(action, text, when, deadline)` | "Note: …" / "remind me to call Mom at 5" / "I need to submit the form by Friday noon" / "what's on my list?" / "cross off …" | Dock's to-do list. With a time it also goes on the Google calendar (a reminder at that time, or a deadline with an alert an hour before), or Dock reminds the user itself |
 | `get_schedule(day: today/tomorrow/next)` | "What's on today?" / "when's my next class?" | Reads Google Calendar (through "Sign in with Google", repeating events included); same on Mac and Windows |
 | `get_ready(for_what)` | "Get ready for stat class" / "get ready" | Opens the event's Meet/Zoom link and the matching folder or workspace (STAT 310 → stat310), and mentions related notes |
@@ -92,6 +93,11 @@
 | `improve_writing(how)` | Select text, then "fix the grammar" / "check this for typos" / "make this more professional" / "make it shorter" / "translate this to Spanish" | Shows a suggestion first (changes marked, on the phone and the Mac), for the selection in any app (documents, email, web forms); asked again, it changes the suggestion further |
 | `apply_writing(where)` | "Use it" / "put it below" / "never mind" | Replaces the selection with the suggestion, or adds it under the original, in place with no copy and paste; Command Z undoes it |
 | `search_web(query, go)` | "Google how to cite a website in APA" / "look up the library hours", or anything Dock can't do or answer | Offers the search first (a "Search Google?" card with Search and Not now); only Search or "yes" (`go`) opens it, in a new tab of the default browser |
+
+### Ask about your stuff (RAG)
+| Tool | Say | What happens |
+|---|---|---|
+| `search_my_stuff(question, kind, since_days, open_source)` | "What's the Wi-Fi password the landlord sent?" / "when is the CS589 project due?" / "how many late days do I get?", then "open it" | Answers from your own documents, recent email, notes and calendar, and says where the answer came from. Hybrid search (Titan embeddings in sqlite-vec + FTS5 keywords, merged by reciprocal rank fusion), then Claude Haiku answers only from the best excerpts or says it couldn't find it. Indexes on first use, refreshes every 30 minutes, all kept on the computer. Eval: 22/22 correct, 3/3 "not found" on questions with no answer |
 
 ### Files into folders
 | Tool | Say | What happens |
@@ -136,7 +142,7 @@ curl -s -X POST localhost:8000/mcp -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'
 
-# tools/list: the 28 tools
+# tools/list: the 30 tools
 curl -s -X POST localhost:8000/mcp -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
   -H "MCP-Protocol-Version: 2025-11-25" -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'

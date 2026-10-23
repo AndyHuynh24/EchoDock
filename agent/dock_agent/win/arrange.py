@@ -1,10 +1,4 @@
-"""Arrange windows by voice on Windows: "Chrome on the left and my notes on
-the right", "make this full screen", "move this to my other screen", "hide
-everything but this" (the same answers as dock_agent/arrange.py on the Mac).
-
-Places are parts of the screen's usable area (without the taskbar); "full"
-maximizes the window. An app that isn't open yet is opened first.
-"""
+"""Arrange windows by voice on Windows, within the work area (excluding the taskbar)."""
 
 import time
 
@@ -22,8 +16,8 @@ PLACES = {
     "top left": (0, 0, 1 / 2, 1 / 2), "top right": (1 / 2, 0, 1 / 2, 1 / 2),
     "bottom left": (0, 1 / 2, 1 / 2, 1 / 2), "bottom right": (1 / 2, 1 / 2, 1 / 2, 1 / 2),
 }
-GAP = 4  # pixels between windows
-KEEP = "as is"  # leave the window where it is (just bring it forward): "hide everything except VS Code"
+GAP = 4
+KEEP = "as is"  # bring forward without moving
 
 
 class ArrangeError(Exception):
@@ -31,7 +25,7 @@ class ArrangeError(Exception):
 
 
 def _window(name: str) -> int:
-    """The window for a spoken app name ("" or "this" = the window in front), opening the app if needed."""
+    """Window for a spoken app name ("" or "this" = front window), opening the app if needed."""
     if name.strip().lower() in ("", "this", "this app", "this window", "it"):
         from dock_agent.win import menus
         _, pid = menus.front_app()
@@ -44,12 +38,12 @@ def _window(name: str) -> int:
         return hwnd
     found = apps.find_app(name)
     target = apps._norm(name)
-    # Only a close match ("chrome" for Google Chrome), never a guess.
+    # Close matches only.
     if found is None or not (apps._norm(found[0]).startswith(target) or target in apps.ALIASES
                              or any(apps._norm(word).startswith(target) for word in found[0].split())):
         raise ArrangeError(f"I couldn't find an app called {name}.")
     apps.launch(found[1])
-    for _ in range(80):  # wait up to 8 s for its window
+    for _ in range(80):
         time.sleep(0.1)
         hwnd = apps.running_window(found[0])
         if hwnd:
@@ -75,7 +69,7 @@ def _move(hwnd: int, rect, maximize: bool) -> None:
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         time.sleep(0.15)
     x, y, w, h = rect
-    left, top, right, bottom = winapi.borders(hwnd)  # (so the visible edges line up, not the invisible ones)
+    left, top, right, bottom = winapi.borders(hwnd)  # align the visible edges
     win32gui.SetWindowPos(hwnd, 0, int(x - left), int(y - top), int(w + left + right), int(h + top + bottom),
                           win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
     if maximize:
@@ -83,8 +77,7 @@ def _move(hwnd: int, rect, maximize: bool) -> None:
 
 
 def arrange(layout: list[dict], screen: str = "this", hide_others: bool = False) -> dict:
-    """layout: [{"app": "Chrome", "place": "left"}, ...]; app "" means the app in front.
-    screen: "this" (where the first window is), "other" (the next screen) or "main"."""
+    """layout: [{"app": "Chrome", "place": "left"}, ...]. screen: "this", "other" or "main"."""
     screens = winapi.screens()
     done, problems, keep = [], [], set()
     target = None

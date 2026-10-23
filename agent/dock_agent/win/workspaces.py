@@ -1,13 +1,5 @@
-"""Saved workspaces on Windows: "remember this workspace as Study", then later
-"open my Study workspace" (the same answers as dock_agent/workspaces.py).
-
-Saving records, for every app window on this desktop: the program, where
-the window is (and whether it's maximized), the file it shows (when the
-window title names a recently opened file), File Explorer folders, and the
-page each browser window shows (Windows only lets Dock see a browser's
-current tab, not all of them). Opening reopens all of that and moves the
-windows back. Saved in ~/.dock/workspaces/, like on the Mac, so the names
-are shared with workspaces.py (bare, list_all, _load).
+"""Saved workspaces on Windows: programs, window positions, files, File Explorer
+folders and each browser window's current page. Shares storage with the Mac version.
 """
 
 import json
@@ -24,7 +16,7 @@ import win32gui
 from dock_agent.win import uia, winapi
 from dock_agent.workspaces_common import WORKSPACE_DIR, WorkspaceError, _load, _norm, bare, list_all
 
-SETTLE_SECONDS = 3.0  # time for reopened apps to show their windows
+SETTLE_SECONDS = 3.0
 BROWSERS = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe"}
 ADDRESS_NAMES = ("address and search bar", "search or enter address", "search with google or enter address", "address")
 CREATE_NO_WINDOW = 0x08000000
@@ -33,7 +25,7 @@ __all__ = ["WorkspaceError", "bare", "list_all", "save", "open_workspace"]
 
 
 def _explorer_folders() -> dict[int, str]:
-    """Window -> the folder each File Explorer window shows."""
+    """Window -> folder for each File Explorer window."""
     winapi.com_ready()
     import win32com.client
     folders = {}
@@ -51,7 +43,7 @@ def _explorer_folders() -> dict[int, str]:
 
 
 def _browser_url(hwnd: int) -> str:
-    """The page a browser window shows, from its address bar."""
+    """Current page of a browser window, from its address bar."""
     window = uia.window(hwnd)
     if window is None:
         return ""
@@ -64,7 +56,7 @@ def _browser_url(hwnd: int) -> str:
             except Exception:
                 url = ""
             if url and "://" not in url and "." in url.split("/")[0]:
-                url = "https://" + url  # (browsers hide "https://")
+                url = "https://" + url
             return url if url.startswith(("http://", "https://")) else ""
     return ""
 
@@ -84,7 +76,7 @@ def save(name: str) -> dict:
         program = winapi.exe_path(pid)
         app_name = winapi.app_name(pid, hwnd)
         if not program or program.lower().endswith(winapi.FRAME_HOST):
-            continue  # (Store apps can't be reopened this way)
+            continue
         entry = by_app.setdefault(program, {"app": app_name, "path": program, "windows": []})
         window_title = winapi.title(hwnd)
         window = {"title": window_title, "document": winapi.document_in_title(window_title), **_placement(hwnd)}
@@ -112,8 +104,7 @@ def save(name: str) -> dict:
 
 
 def _folders_from_titles(windows: list[dict]) -> list[str]:
-    """If File Explorer's folders weren't saved: a window's title is its folder's
-    name ("Downloads", or "Downloads - File Explorer")."""
+    """Older workspaces: a File Explorer window's title is its folder name."""
     home = Path.home()
     folders = []
     for window in windows:
@@ -151,7 +142,7 @@ def _move_windows(app: dict) -> None:
     current = [h for h in winapi.app_windows() if winapi.exe_path(winapi.window_pid(h)).lower() == app["path"].lower()]
 
     def pick(saved):
-        # Same title first, then whatever window of the app is left.
+        # Match by title, then any remaining window.
         for test in (lambda h: saved["title"] and winapi.title(h) == saved["title"],
                      lambda h: saved.get("document") and Path(saved["document"]).name in winapi.title(h),
                      lambda h: True):

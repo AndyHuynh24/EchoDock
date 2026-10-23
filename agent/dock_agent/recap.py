@@ -1,6 +1,4 @@
-"""What the user did today (or yesterday): minutes per app (recorded by
-watch.py while the agent runs) and the files they changed or opened (from
-Spotlight)."""
+"""Today's activity: minutes per app (from watch.py) and files changed (from Spotlight)."""
 
 import subprocess
 from datetime import date, datetime, timedelta, timezone
@@ -20,7 +18,7 @@ def _files(attribute: str, offset: int) -> list[dict]:
 
 
 def files_changed_since(timestamp: float) -> list[dict]:
-    """Files changed since `timestamp` (e.g. the start of a focus session)."""
+    """Files changed since `timestamp`."""
     since = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return _search(f"kMDItemContentModificationDate >= $time.iso({since})")
 

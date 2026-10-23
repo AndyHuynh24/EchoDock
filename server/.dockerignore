@@ -1,0 +1,6 @@
+.venv/
+.data/
+__pycache__/
+*.log
+google_oauth_client.json
+evals/results/

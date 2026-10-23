@@ -1,5 +1,4 @@
-"""What Mac and Windows workspaces share: where they're saved
-(~/.dock/workspaces/), their names, and finding one by a spoken name."""
+"""Shared workspace storage and name matching (Mac and Windows)."""
 
 import difflib
 import json
@@ -18,7 +17,7 @@ def _norm(text: str) -> str:
 
 
 def bare(name: str) -> str:
-    """ "stat310 workspace" is just "stat310" (people add the word when they say it)."""
+    """Drop a trailing "workspace"."""
     return re.sub(r"(\s*workspace)+$", "", name.strip(), flags=re.IGNORECASE).strip() or name.strip()
 
 
@@ -29,9 +28,7 @@ def list_all() -> list[str]:
 
 
 def _load(name: str) -> dict:
-    # Keys without punctuation or "workspace": speech-to-text writes "stat310" as
-    # "stat 3:10" or "start 310", so after exact and partial names, the closest
-    # name wins if it's close enough.
+    # Normalized keys; fall back to the closest name for speech errors ("stat 3:10").
     files = {_norm(bare(json.loads(p.read_text())["name"])): p for p in WORKSPACE_DIR.glob("*.json")} if WORKSPACE_DIR.is_dir() else {}
     key = _norm(bare(name))
     match = files.get(key) or next((p for stem, p in files.items() if key and (stem.startswith(key) or key in stem)), None)

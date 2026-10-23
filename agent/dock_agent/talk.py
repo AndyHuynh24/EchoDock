@@ -1,9 +1,5 @@
-"""Talking to Dock on the Mac: press the talk key once (hotkey.py) or click
-Dock's face in the menu bar, like tapping the face on the phone. The chat box
-opens and Dock listens ("Listening…", the menu bar face turns cyan); type
-instead and it stops listening. When you stop talking (or press the key again)
-Whisper turns your words into text on this Mac (speech.py), and the bubble's
-page sends them to Dock and speaks the answer (bubble.py, voice_out.py).
+"""Talking to Dock on the Mac: the talk key or a click on the menu bar face opens the
+chat box and starts listening. Speech is transcribed locally (speech.py).
 """
 
 import threading
@@ -17,27 +13,28 @@ _listening = False
 
 
 def start() -> bool:
-    """Main thread. False if the talk key couldn't be set up (no Accessibility yet)."""
-    # (Run just after the key event, not inside it: from inside, the chat box
-    # can't take the keyboard.)
+    """Main thread. False if the talk key couldn't be registered."""
+    # Run after the key event; the chat box can't take focus from inside it.
     return hotkey.start(lambda: AppHelper.callAfter(tap))
 
 
 def tap() -> None:
-    """The talk key or a click on the face (main thread). Listening: send what
-    was said now. Talking: be quiet. Otherwise open the chat box and listen."""
-    if _listening:
+    """Talk key or face click (main thread): send, close, stop speaking, or start listening."""
+    if _listening and _listener.talked():
         _released()
+    elif _listening or bubble.composing():
+        cancel()
+        bubble.compose(False)
     elif voice_out.speaking():
         voice_out.stop()
-    elif not bubble.just_closed():  # (a click on the face that just closed the chat box)
-        toggle()  # (listen first: the other way round, the chat box doesn't get the typing)
+    elif not bubble.just_closed():
+        toggle()  # listen first, or the chat box misses the typing
         bubble.compose(True)
 
 
 def _hints() -> list[str]:
-    """Words to expect: the user's folder names, then the front app's menu items (already read, so quick)."""
-    hints = files.spoken_folder_names()[:12]  # (short: long hints make Whisper invent lists)
+    """Hints: folder names, then the front app's menu items."""
+    hints = files.spoken_folder_names()[:12]
     try:
         _, pid = menus.front_app()
         cached = menus._cache.get(pid)
@@ -49,8 +46,7 @@ def _hints() -> list[str]:
 
 
 def toggle() -> None:
-    """The microphone button in the chat box: start listening, or send what was
-    said. It also sends by itself once the user stops talking."""
+    """Chat box mic button: start listening, or send."""
     if _listening:
         _released()
     else:
@@ -62,7 +58,7 @@ def listening() -> bool:
 
 
 def cancel() -> None:
-    """Clicked again while listening: stop, and send nothing."""
+    """Cancel listening without sending."""
     global _listening
     if not _listening:
         return
@@ -79,7 +75,7 @@ def _pressed(on_pause=None) -> None:
     voice_out.stop()
     if speech.permissions()["microphone"] != "allowed":
         speech.ask_permission()
-        bubble.call("showAnswer('', 'Allow the microphone for OneDock, then try again.'); hideLater($('answer'), 8000)")
+        bubble.call("showAnswer('', 'Allow the microphone for OneDock, then try again.'); hideLater($('answer'), 8000, { everywhere: false })")
         return
     try:
         _listener = _listener or speech.Listener()
@@ -87,7 +83,7 @@ def _pressed(on_pause=None) -> None:
     except Exception as e:
         print(f"Couldn't start listening: {e!r}")
         bubble.call("showAnswer('', \"The microphone didn't start. Check System Settings › Privacy › Microphone.\"); "
-                    "hideLater($('answer'), 8000)")
+                    "hideLater($('answer'), 8000, { everywhere: false })")
         return
     _listening = True
     menubar.set_listening(True)

@@ -1,17 +1,5 @@
-"""Help with things that aren't in an app's menus: toolbar buttons, icons and
-other controls in the window.
-
-1. The window's own controls (free, exact): macOS Accessibility lists most
-   buttons with a name, even when they're not in a menu (Safari's Share,
-   VS Code's Split Editor). Dock points at the real button, and "do it"
-   presses it.
-2. A screenshot of only the window in front, taken when the user asks and
-   nothing else found it. The server asks the AI where the control is; Dock
-   circles that spot, and "do it" clicks there. Needs the Screen Recording
-   permission (only for this).
-
-Windows: UI Automation lists controls the same way; screenshots via
-PrintWindow/BitBlt (docs/WINDOWS-PORT.md).
+"""Help for controls outside the menus: named window controls via Accessibility,
+then a window screenshot for the server's vision model (needs Screen Recording).
 """
 
 import base64
@@ -42,13 +30,13 @@ from dock_agent import menus
 CONTROL_ROLES = {"AXButton", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton",
                  "AXDisclosureTriangle", "AXLink", "AXSlider", "AXComboBox", "AXTextField", "AXSearchField"}
 MAX_CONTROLS = 400
-MAX_VISITED = 4000      # big web-based windows have thousands of parts
+MAX_VISITED = 4000
 MAX_SECONDS = 2.0
-MIN_SHOWING = 0.6       # this much of a control must be inside the visible area
-CLIPPING_ROLES = {"AXScrollArea", "AXWebArea"}  # parts outside these are scrolled away
-SHOT_WIDTH = 1280       # the screenshot is shrunk to this width for the AI
+MIN_SHOWING = 0.6  # visible fraction required
+CLIPPING_ROLES = {"AXScrollArea", "AXWebArea"}
+SHOT_WIDTH = 1280  # screenshot width sent to the model
 
-_controls: list = []    # the elements from the last look, by number
+_controls: list = []
 
 
 class NotAllowed(Exception):
@@ -56,7 +44,7 @@ class NotAllowed(Exception):
 
 
 def screen_permission(ask: bool = False) -> bool:
-    """True if Dock may take screenshots. ask=True shows macOS's question (once)."""
+    """Whether screenshots are allowed. ask=True prompts once."""
     return bool(CGRequestScreenCaptureAccess() if ask else CGPreflightScreenCaptureAccess())
 
 
@@ -69,16 +57,14 @@ def _name(element) -> str:
 
 
 def _overlap(rect, clip) -> tuple | None:
-    """The part of rect inside clip (both x, y, width, height), or None."""
+    """Intersection of rect and clip, or None."""
     left, top = max(rect[0], clip[0]), max(rect[1], clip[1])
     right, bottom = min(rect[0] + rect[2], clip[0] + clip[2]), min(rect[1] + rect[3], clip[1] + clip[3])
     return (left, top, right - left, bottom - top) if right > left and bottom > top else None
 
 
 def _showing(rect, clip) -> bool:
-    """Is most of the control really visible? Web pages keep hidden panels,
-    scrolled-away buttons and off-screen templates in the list too (Canva's
-    "Add media" when it isn't on screen), and pointing at those points at nothing."""
+    """Whether most of the control is actually visible (web apps list hidden elements too)."""
     if rect[2] < 4 or rect[3] < 4:
         return False
     part = _overlap(rect, clip) if clip else rect
@@ -86,12 +72,11 @@ def _showing(rect, clip) -> bool:
 
 
 def window_controls() -> dict:
-    """The named buttons and other controls in the front app's window that are
-    showing (not scrolled away or hidden off screen)."""
+    """Visible named controls in the front window."""
     global _controls
     app_name, pid = menus.front_app()
     app = AXUIElementCreateApplication(pid)
-    # Chrome, VS Code and other web-based apps only list their parts when asked to.
+    # Chromium-based apps expose their tree only on request.
     AXUIElementSetAttributeValue(app, "AXManualAccessibility", True)
     window = menus._get(app, "AXFocusedWindow") or menus._get(app, "AXMainWindow")
     found, seen = [], 0
@@ -106,7 +91,7 @@ def window_controls() -> dict:
         if role in CLIPPING_ROLES:
             rect = menus._rect(element)
             clip = (_overlap(rect, clip) if clip else rect) if rect else clip
-            if clip is None:  # scrolled or hidden away entirely
+            if clip is None:
                 continue
         if role in CONTROL_ROLES:
             name = _name(element)
@@ -133,13 +118,12 @@ def control_rect(number: int):
 
 
 def press_control(number: int) -> None:
-    control_rect(number)  # still there?
+    control_rect(number)
     AXUIElementPerformAction(_controls[number], "AXPress")
 
 
 def window_screenshot() -> dict:
-    """A screenshot of only the front app's window, shrunk for the AI, and
-    where that window is on screen (points, from the top-left)."""
+    """Screenshot of the front window (shrunk) and its frame on screen."""
     if not screen_permission():
         screen_permission(ask=True)
         raise NotAllowed("To look at your screen, Dock needs Screen Recording. Open Dock from the menu bar to allow it.")
@@ -148,7 +132,7 @@ def window_screenshot() -> dict:
                if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowLayer") == 0]
     if not windows:
         raise LookupError(f"I can't see a {app_name} window.")
-    window = windows[0]  # the frontmost one
+    window = windows[0]
     bounds = window["kCGWindowBounds"]
     with tempfile.TemporaryDirectory() as folder:
         path = os.path.join(folder, "window.png")
@@ -163,11 +147,10 @@ def window_screenshot() -> dict:
 
 
 def screen_region(rect: list[float]) -> dict:
-    """A sharp close-up of part of the screen (x, y, width, height in points), for
-    pinning down exactly where a small control is."""
+    """High-resolution capture of a screen region, for small controls."""
     if not screen_permission():
         raise NotAllowed("To look at your screen, Dock needs Screen Recording.")
-    # Keep it on the screen the spot is on (macOS can't capture past its edge).
+    # Clamp to the screen containing the spot.
     from AppKit import NSScreen
     main_height = NSScreen.screens()[0].frame().size.height
     cx, cy = rect[0] + rect[2] / 2, rect[1] + rect[3] / 2
@@ -191,7 +174,7 @@ def screen_region(rect: list[float]) -> dict:
 
 
 def click(x: float, y: float) -> None:
-    """One left click at (x, y), in screen points from the top-left."""
+    """Left click at (x, y) in screen points."""
     for kind in (kCGEventMouseMoved, kCGEventLeftMouseDown, kCGEventLeftMouseUp):
         CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, kind, (x, y), kCGMouseButtonLeft))
         time.sleep(0.05)

@@ -1,21 +1,6 @@
-"""Focus mode: guards your goal, not just your time.
+"""Focus mode: timer, desk presence, drift nudges, breaks and session reports.
 
-- Start with a goal ("focus on stat310 homework for 50 minutes", or the Start
-  button on the phone; both call `start`). No length means "until I end it".
-  A saved workspace that matches the goal opens automatically.
-- The phone camera says whether you're at the desk (the video never leaves
-  the phone). Away: the timer pauses. Back after a while: "Welcome back, you
-  were in hw_03.Rmd", and that file comes to the front again.
-- Gentle drift nudges: every 15 s Dock checks the window in front. Time on
-  clearly distracting sites/apps (YouTube, Discord...) counts as drift, unless
-  a quick AI check says it helps the goal (a dplyr tutorial for stat310 is
-  fine). After 2 minutes of drift, the phone face looks worried and shows
-  "Back to stat310?". Nothing is blocked, and there's no sound.
-- Time's up: a spoken summary and a break with flashcards of the shortcuts you
-  asked Dock about.
-- The end report ("proof of work"): time focused, away and drifting, apps
-  used, files changed during the session, and whether you finished. Every
-  session is logged for the weekly report (.data/focus_log.json).
+Sessions are logged to .data/focus_log.json for the weekly report.
 """
 
 import asyncio
@@ -89,25 +74,22 @@ class FocusMode:
         await ws.send_text(json.dumps(self._view()))
 
     async def say(self, text: str) -> None:
-        """Speak on the phone, whether the request was typed or spoken."""
         await self.hub.push_phone("say", text=text)
 
     # ---- start / pause / resume / end ----
 
-    async def start(self, goal: str = "", minutes: int = 0, workspace: str = "") -> str:
+    async def start(self, goal: str = "", minutes: int = 0) -> str:
         if self.session and self.session["state"] in ("running", "away", "paused"):
             return f"A session for {self.session['goal']} is already running. Say end session first."
         goal = goal.strip() or "deep work"
-        opened = await self._open_workspace(goal, workspace)
         now = time.time()
         self.session = {
             "goal": goal, "goal_words": _words(goal), "planned": max(0, minutes) * 60,
             "started": now, "state": "running", "last_tick": now, "last_check": 0.0, "last_push": now,
             "focused": 0.0, "away": 0.0, "paused": 0.0, "drift": 0.0, "drift_run": 0.0, "nudged": False,
-            "away_since": None, "away_count": 0, "app_seconds": {}, "goal_apps": set(opened.get("apps", [])),
+            "away_since": None, "away_count": 0, "app_seconds": {}, "goal_apps": set(),
             "last_on_task": {}, "questions_at_start": len(self.state.questions), "break_until": 0.0, "report": None,
         }
-        await asyncio.sleep(1.5 if opened else 0)
         try:
             front = await self.hub.ask_agent("front_window")
             self.session["goal_apps"].add(front["app"])
@@ -116,26 +98,11 @@ class FocusMode:
         self._ensure_clock()
         await self.push()
         length = f"for {_span(minutes)}" if minutes else "until you end it"
-        text = f"Started your {goal} session {length}."
-        if opened:
-            text += f" I opened your {opened['name']} workspace."
-        return text
+        return f"Started your {goal} session {length}."
 
     def _ensure_clock(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._run())
-
-    async def _open_workspace(self, goal: str, workspace: str) -> dict:
-        try:
-            names = (await self.hub.ask_agent("list_workspaces"))["names"]
-            if not workspace:
-                goal_words = _words(goal)
-                workspace = next((n for n in names if _words(n) and _words(n) <= goal_words), "")
-            if workspace:
-                return await self.hub.ask_agent("open_workspace", timeout=30, name=workspace)
-        except (AgentOffline, AgentError):
-            pass
-        return {}
 
     async def pause(self) -> str:
         s = self.session
@@ -170,7 +137,7 @@ class FocusMode:
         return self._report_text(report)
 
     async def mark_finished(self, completed: bool) -> str:
-        """The answer to "did you finish your goal?" after a session."""
+        """Answer to "did you finish your goal?"."""
         log = self._load_log()
         if log:
             log[-1]["completed"] = completed
@@ -232,14 +199,14 @@ class FocusMode:
         return f"Enjoy a {minutes} minute break. I put some shortcut flashcards on your phone."
 
     def flashcards(self) -> list[dict]:
-        """Shortcuts the user asked about; if none yet, the shortcuts on the phone pad."""
+        """Shortcuts asked about, or the pad's shortcuts if none."""
         cards = list(self.state.shortcuts_seen.values())
         if not cards and self.state.pad:
             cards = [{"app": self.state.pad["app"], "name": b["title"], "shortcut": b["shortcut"]}
                      for b in self.state.pad.get("buttons", []) if b.get("shortcut")]
         return cards[:12]
 
-    # ---- presence from the phone camera ----
+    # ---- presence ----
 
     async def presence(self, present: bool) -> None:
         s = self.session
@@ -269,10 +236,22 @@ class FocusMode:
         except (AgentOffline, AgentError):
             pass
 
+    async def skip_to_end(self, seconds: int = 3) -> bool:
+        """Test remote: end the running session in a few seconds."""
+        s = self.session
+        if not s or s["state"] not in ("running", "away", "paused"):
+            return False
+        self._tick()
+        if not s["planned"]:
+            s["planned"] = s["focused"] + seconds
+        s["focused"] = max(s["focused"], s["planned"] - seconds)
+        print(f"Remote: focus timer skipped to the last {seconds} s")
+        await self.push()
+        return True
+
     # ---- the clock ----
 
     def _tick(self) -> None:
-        """Add the time since the last tick to the right bucket."""
         s = self.session
         now = time.time()
         passed, s["last_tick"] = now - s["last_tick"], now
@@ -335,7 +314,7 @@ class FocusMode:
                 await self.push()
 
     async def _classify(self, app: str, title: str, document: str) -> str:
-        """"on" (helps the goal), "off" (a distraction) or "neutral"."""
+        """"on", "off" or "neutral" relative to the goal."""
         s = self.session
         text = f"{app} {title} {document}"
         if s["goal_words"] & _words(text):
@@ -345,8 +324,7 @@ class FocusMode:
             return "on" if app in s["goal_apps"] else "neutral"
         key = f"{s['goal']}|{app}|{title}"
         if key not in self.relevance_cache:
-            # What they've been working in tells the AI what the goal involves
-            # (RStudio + hw_03.Rmd means R, so an R tutorial helps).
+            # Recent apps and files give the model context for the goal.
             last = s["last_on_task"]
             working_in = ", ".join(sorted(a for a in s["goal_apps"] if a != app))
             if last.get("document"):
@@ -354,10 +332,9 @@ class FocusMode:
             prompt = (f"Focus goal: {s['goal']}\nThey have been working in: {working_in or 'unknown'}\n"
                       f"Now they are looking at: {app} — {title}\nIs this probably helping with the goal?")
             try:
-                answer = await asyncio.to_thread(bedrock.ask, prompt, RELEVANCE_SYSTEM, 5)
+                answer = await asyncio.to_thread(bedrock.ask, prompt, RELEVANCE_SYSTEM, 5, purpose="on-task check")
             except Exception:
                 answer = "no"
-            # Models sometimes add formatting ("**Yes**"), so look past it.
             verdict = re.match(r"\W*(yes|no)", answer, re.IGNORECASE)
             self.relevance_cache[key] = bool(verdict) and verdict.group(1).lower() == "yes"
         return "on" if self.relevance_cache[key] else "off"
@@ -388,7 +365,7 @@ class FocusMode:
         LOG_FILE.write_text(json.dumps(log, indent=2))
 
     async def week_report(self) -> str:
-        """The last 7 days, without AI: minutes per day, goals finished, focus quality."""
+        """Last 7 days: minutes per day, goals finished, focus quality."""
         today = date.today()
         days = [today - timedelta(days=n) for n in range(6, -1, -1)]
         log = [r for r in self._load_log() if r["date"] >= days[0].isoformat()]
@@ -419,7 +396,6 @@ class FocusMode:
         if kind == "start_focus":
             text = await self.start(str(message.get("goal", "")), int(message.get("minutes") or 0))
             if not text.startswith("Started"):
-                # Only when it didn't start (e.g. one is already running): the timer itself shows a start.
                 await self.hub.push_phone("card", title="Focus mode", detail=text)
         elif kind == "pause_focus":
             await self.pause()

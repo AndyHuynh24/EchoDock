@@ -1,11 +1,5 @@
-"""Windows Search: the index Windows keeps of your files (the same one the
-Start menu and File Explorer search use), so finding "stat310" is instant,
-like Spotlight on the Mac. Your user folder (Desktop, Documents, Downloads,
-OneDrive) is indexed by default, including the text inside documents and PDFs.
-
-Asked through its standard database interface (ADODB, "Search.CollatorDSO").
-If the index isn't running, these return nothing and files.py walks the
-folders itself instead.
+"""Windows Search index queries (ADODB, Search.CollatorDSO). Returns nothing if the
+index isn't available, and files.py walks the folders instead.
 """
 
 from pathlib import Path
@@ -39,8 +33,7 @@ def _query(where: str, root: Path) -> list[Path]:
 
 
 def names(words: list[str], root: Path, folders: bool | None = None) -> list[Path]:
-    """Files or folders whose name has all the words in this order ("stat 310"
-    finds STAT310 and Stat-310). Words are only a–z and 0–9, so they're safe in the query."""
+    """Files or folders whose name has all the words in order. Words are [a-z0-9] only."""
     if not words:
         return []
     where = f"System.FileName LIKE '%{'%'.join(words)}%'"

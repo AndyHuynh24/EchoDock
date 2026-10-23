@@ -1,5 +1,4 @@
-"""Desk assistant tools: control the computer. These work with or without a
-focus session."""
+"""Computer control tools. They work with or without a focus session."""
 
 from typing import Literal
 
@@ -16,8 +15,7 @@ SEARCH_TIMEOUT = 15
 
 
 async def run_on_computer(hub: Hub, action: str, timeout: float = 5, **args) -> dict:
-    """Ask the desktop agent to do something. Problems become tool errors, so
-    the caller (Alexa+ or the voice mode) knows the step didn't work."""
+    """Run a job on the desktop agent; failures become tool errors."""
     try:
         return await hub.ask_agent(action, timeout=timeout, **args)
     except AgentOffline:
@@ -31,13 +29,12 @@ Place = Literal["left", "right", "top", "bottom", "full", "center", "left third"
 
 
 class WindowPlace(BaseModel):
-    app: str = ""   # "" means the app in front
+    app: str = ""
     place: Place
 
 
 def register(mcp: MCPServer, hub: Hub, savings: Savings) -> None:
-    # People say "open CS589" for a folder and "open Calculator" for an app, so
-    # each of the two tools tries the other kind before giving up.
+    # Folders and apps fall back to each other ("open CS589" vs "open Calculator").
     async def folder_reply(result: dict) -> str:
         folder, place = result["folder"], result["where"]
         await hub.push_phone("toast", text=f"✓ Opened {folder}")
@@ -85,7 +82,6 @@ def register(mcp: MCPServer, hub: Hub, savings: Savings) -> None:
         found = result["files"]
         if not found:
             if name and not kind and not days:
-                # "Open CS 589" can be a folder, not a file.
                 try:
                     folder = await run_on_computer(hub, "find_folder", timeout=SEARCH_TIMEOUT, name=name)
                     if folder.get("folder"):
@@ -125,10 +121,31 @@ def register(mcp: MCPServer, hub: Hub, savings: Savings) -> None:
             return await app_reply(await run_on_computer(hub, "open_app", name=name))
         except ToolError as no_app:
             try:
-                # Only a folder with that very name: "photoshop" must never open a "photos" folder.
+                # Exact folder names only.
                 return await folder_reply(await run_on_computer(hub, "open_folder", timeout=SEARCH_TIMEOUT, name=name, close=False))
             except ToolError:
                 raise no_app
+
+    @mcp.tool()
+    async def close_windows(app: str = "", which: Literal["front", "all"] = "front") -> str:
+        """Close windows on the user's computer, like clicking their close button.
+        app: the app's name ("" = the app in front, "all" = every app).
+        which: "front" (its front window) or "all" (all its windows). Examples:
+        - "close this window": app "", which front,
+        - "close all the Finder windows" / "close Safari": app Finder / Safari, which all,
+        - "close all windows" / "close everything on my desktop": app "all".
+        Apps keep running, and a window with unsaved work asks to save first, so
+        nothing is lost. Not for tabs or minimizing (app_help)."""
+        result = await run_on_computer(hub, "close_windows", timeout=20, app=app, which=which)
+        closed, names = result["closed"], result["apps"]
+        if not closed:
+            return f"There are no {app + ' ' if app and app != 'all' else ''}windows to close."
+        await hub.push_phone("done", title=f"Closed {closed} window{'s' if closed != 1 else ''}",
+                             detail=", ".join(names)[:80])
+        await savings.add("arranged", 1)
+        if app == "all":
+            return f"Done: I closed {closed} window{'s' if closed != 1 else ''}."
+        return f"Done: I closed {closed if closed > 1 else 'the'} {names[0]} window{'s' if closed != 1 else ''}."
 
     @mcp.tool()
     async def arrange_windows(layout: list[WindowPlace], screen: Literal["this", "other", "main"] = "this",
@@ -142,11 +159,16 @@ def register(mcp: MCPServer, hub: Hub, savings: Savings) -> None:
         - "move this to my other screen": [{app "", place full}], screen "other",
         - "just Chrome, hide the rest": [{app Chrome, place full}], hide_others true,
         - "close everything except VS Code": [{app VS Code, place "as is"}], hide_others true
-          (the other apps are hidden, never quit, so nothing unsaved is lost).
+          (the other apps are hidden, never quit, so nothing unsaved is lost),
+        - "hide everything" / "clear my screen": [] with hide_others true (everything is hidden).
         Closing or minimizing a window isn't arranging it."""
         result = await run_on_computer(hub, "arrange_windows", timeout=20,
                                        layout=[item.model_dump() for item in layout], screen=screen, hide_others=hide_others)
         done, problems = result["arranged"], result["problems"]
+        if "cleared" in result:
+            await hub.push_phone("done", title="Desktop cleared", detail="Your apps are hidden, not closed")
+            await savings.add("arranged", 1)
+            return "Done: I hid all your windows. Nothing was closed, so nothing is lost."
         kept = [d["app"] for d in done if d["place"] == "as is"]
         if kept and hide_others and len(kept) == len(done):
             await hub.push_phone("done", title=f"Only {', '.join(kept)} now"[:48], detail="The other apps are hidden, not closed")

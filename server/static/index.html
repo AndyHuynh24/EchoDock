@@ -14,10 +14,17 @@
 </head>
 <body data-view="face" data-stage="face">
   <header id="topbar">
-    <button type="button" id="focus-button" class="pill">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9.5 2.5h5"/></svg>
-      <span id="focus-button-text">Focus</span>
-    </button>
+    <div id="topbar-left">
+      <button type="button" id="focus-button" class="pill">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9.5 2.5h5"/></svg>
+        <span id="focus-button-text">Focus</span>
+      </button>
+      <!-- Mute: show answers without speaking them. -->
+      <button type="button" id="mute-button" class="pill" aria-label="Mute Dock" aria-pressed="false">
+        <svg class="sound-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
+        <svg class="sound-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>
+      </button>
+    </div>
     <div id="status" hidden>Connecting…</div>
     <div id="views" role="tablist">
       <button type="button" class="view-tab active" data-view="face">Dock</button>
@@ -26,12 +33,10 @@
   </header>
 
   <main id="main">
-    <!-- The stage shows one thing at a time: the face, the focus timer, or the cards. -->
+    <!-- The stage shows one thing at a time: the face, the focus timer, or cards. -->
     <section id="stage">
       <div id="face-scene" class="scene">
-        <div class="face-tips" id="face-tips-left"></div>
-        <div class="face-tips" id="face-tips-right"></div>
-        <svg id="face" class="mood-happy" viewBox="0 0 300 210" role="img" aria-label="Dock's face">
+        <svg id="face" class="mood-happy" viewBox="0 30 300 163" role="img" aria-label="Dock's face">
           <g class="float">
             <g transform="translate(98 82)"><g class="eye left"><g class="look"><g class="lid">
               <rect class="eye-open" x="-25" y="-38" width="50" height="76" rx="25"/>
@@ -41,7 +46,6 @@
               <rect class="eye-open" x="-25" y="-38" width="50" height="76" rx="25"/>
               <path class="eye-happy" d="M-27 12 Q0 -30 27 12"/>
             </g></g></g></g>
-            <!-- The smile: a swoosh with an arrowhead, like the Amazon smile -->
             <g class="mouth" transform="translate(150 158)"><g class="mouth-shape">
               <path class="smile" d="M-78 -14 Q0 32 66 -8 L69 -2 Q0 50 -78 -14 Z"/>
               <path class="arrow" d="M52 -16 L74 -9 L69 13"/>
@@ -49,8 +53,14 @@
             <text class="zz" x="236" y="40">z</text><text class="zz zz2" x="256" y="22">z</text>
           </g>
         </svg>
-        <div id="face-line"></div>
-        <div id="face-detail"></div>
+        <div id="face-below">
+          <div id="face-words">
+            <div id="face-line"></div>
+            <div id="face-detail"></div>
+          </div>
+          <div class="face-tips" id="face-tips-left"></div>
+          <div class="face-tips" id="face-tips-right"></div>
+        </div>
       </div>
 
       <div id="timer-scene" class="scene">
@@ -65,13 +75,15 @@
             <div id="focus-state"></div>
           </div>
         </div>
-        <div id="focus-goal"></div>
-        <div id="timer-moment"></div>
-        <div id="timer-presence"><span id="presence-dot"></span> <span id="presence-text">Camera off</span></div>
+        <div id="timer-info">
+          <div id="focus-goal"></div>
+          <div id="timer-moment"></div>
+          <div id="timer-presence"><span id="presence-dot"></span> <span id="presence-text">Camera off</span></div>
+        </div>
       </div>
 
       <div id="cards" class="scene">
-        <!-- Mac only: the chat box that opens when you click Dock's face in the menu bar -->
+        <!-- Mac only: chat box -->
         <div id="compose" class="panel" hidden>
           <form id="compose-form">
             <input id="compose-input" type="text" placeholder="Ask Dock…" autocomplete="off">
@@ -180,10 +192,9 @@
           <div class="panel-title" id="recap-day"></div>
           <div id="recap-summary"></div>
           <div id="recap-apps"></div>
-          <ul id="recap-files"></ul>
         </div>
 
-        <!-- After a focus session: proof of work -->
+        <!-- Focus session report -->
         <div id="focus-report" class="panel" hidden>
           <button type="button" class="close" aria-label="Close">×</button>
           <div class="eyebrow">Session done</div>
@@ -200,7 +211,7 @@
           </div>
         </div>
 
-        <!-- Break: flashcards of the shortcuts you asked about -->
+        <!-- Break flashcards -->
         <div id="focus-break" class="panel" hidden>
           <div class="eyebrow">Break · <span id="break-left"></span></div>
           <div id="flashcard">
@@ -225,7 +236,7 @@
       </div>
     </section>
 
-    <!-- "Try saying" examples for the app in front (Shortcuts view, and while typing) -->
+    <!-- "Try saying" examples -->
     <section id="try">
       <div id="try-chips">
         <button type="button" class="chip">Tidy my downloads</button>
@@ -262,7 +273,7 @@
   </footer>
   <div id="glow" aria-hidden="true"></div>
 
-  <!-- Focus: start a session, or change the one that is running -->
+  <!-- Focus sheet -->
   <dialog id="focus-sheet" class="sheet">
     <div class="sheet-head"><span>Focus</span><button type="button" class="close" aria-label="Close">×</button></div>
     <div id="focus-start">

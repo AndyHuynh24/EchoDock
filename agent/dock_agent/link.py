@@ -1,6 +1,4 @@
-"""The agent's connection to the server, shared so any part of the agent can
-send a message, e.g. "the app in front changed". Sends are locked because
-replies and events come from different threads."""
+"""Shared, thread-safe connection to the server for sending events."""
 
 import json
 import threading

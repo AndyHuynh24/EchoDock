@@ -1,5 +1,4 @@
-"""Saved workspaces: remember the apps, documents, tabs and window positions
-on screen, and bring them all back later."""
+"""Saved workspaces: apps, documents, tabs and window positions."""
 
 from typing import Literal
 

@@ -8,6 +8,11 @@ dependencies = [
     "google-auth-oauthlib>=1.5.0",
     "mcp==2.3.0",
     "qrcode>=8.2",
+    "sqlite-vec>=0.1.6",
     "uvicorn",
     "websockets",
 ]
+
+[tool.uv]
+# uv's Python builds can load SQLite extensions (sqlite-vec).
+python-preference = "only-managed"

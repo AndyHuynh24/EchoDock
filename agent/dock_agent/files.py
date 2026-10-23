@@ -1,10 +1,6 @@
-"""Find folders and files anywhere in the user's home folder (including iCloud
-Drive and cloud drives like OneDrive), and open them safely.
+"""Find and open folders and files in the user's home folder, including cloud drives.
 
-Searching uses the computer's own index because it is instant: Spotlight
-(mdfind) on the Mac, Windows Search on Windows (win/search.py). If it finds
-nothing, we fall back to walking the usual folders ourselves. The same code
-runs on both; only the index and "open" differ.
+Uses Spotlight on macOS and Windows Search on Windows, with a folder walk as fallback.
 """
 
 import os
@@ -39,13 +35,13 @@ if WINDOWS:
     for name in ("applications", "apps"):
         KNOWN_FOLDERS.pop(name)
 
-# Folders under ~/Library that hold the user's own files.
+# Folders under ~/Library with user files.
 CLOUD_PREFIXES = (("Library", "CloudStorage"), ("Library", "Mobile Documents"))
 SKIP_PARTS = {"Library", "node_modules", "__pycache__", "venv", "cdk.out", "DerivedData", "AppData"}
 WALK_ROOTS = [HOME / "Desktop", HOME / "Documents", HOME / "Downloads",
               HOME / ("OneDrive" if WINDOWS else "Library/CloudStorage")]
 MAX_WALK_DEPTH = 6
-MAX_WALK_SECONDS = 3  # walking a big cloud drive can take minutes, so stop early
+MAX_WALK_SECONDS = 3
 
 FILLER_WORDS = {
     "my", "the", "a", "an", "folder", "file", "files", "directory", "please", "for", "in", "on",
@@ -64,7 +60,7 @@ KINDS = {
     "slide": {".ppt", ".pptx", ".key"},
 }
 
-# Opening these could run a program, so Dock never opens them.
+# Executable types Dock never opens.
 BLOCKED_EXTENSIONS = {
     ".app", ".command", ".sh", ".zsh", ".bash", ".tool", ".terminal", ".workflow", ".pkg",
     ".mpkg", ".scpt", ".applescript", ".py", ".rb", ".pl", ".jar", ".dmg", ".exe",
@@ -76,7 +72,7 @@ MAX_RESULTS = 8
 
 
 class SearchError(Exception):
-    """Something to tell the user, e.g. a folder that doesn't exist."""
+    """An error message meant for the user."""
 
 
 def _norm(text: str) -> str:
@@ -88,8 +84,7 @@ def _words(text: str) -> list[str]:
 
 
 def _user_parts(path: Path) -> tuple[str, ...] | None:
-    """The parts of `path` below the home folder (cloud-drive prefix removed),
-    or None if it isn't in the home folder."""
+    """Parts of `path` below the home folder, or None."""
     try:
         parts = path.relative_to(HOME).parts
     except ValueError:
@@ -101,7 +96,7 @@ def _user_parts(path: Path) -> tuple[str, ...] | None:
 
 
 def _visible(path: Path) -> bool:
-    """True for the user's own files; False for hidden, system and trash files."""
+    """True for the user's own files (not hidden, system or trash)."""
     parts = _user_parts(path)
     return parts is not None and not any(p.startswith(".") or p in SKIP_PARTS for p in parts)
 
@@ -114,8 +109,7 @@ def _mtime(path: Path) -> float:
 
 
 def where(path: Path) -> str:
-    """A short description of the folder that contains `path`, e.g.
-    "Documents/school". Empty for the home folder itself and system folders."""
+    """Short label for the containing folder, e.g. "Documents/school"."""
     parts = _user_parts(path.parent)
     return "/".join(parts) if parts else ""
 
@@ -123,7 +117,7 @@ def where(path: Path) -> str:
 def _when(path: Path) -> str:
     changed = datetime.fromtimestamp(_mtime(path))
     days_ago = (datetime.now().date() - changed.date()).days
-    clock = f"{changed.hour % 12 or 12}:{changed:%M %p}"  # (no leading zero, on Mac and Windows)
+    clock = f"{changed.hour % 12 or 12}:{changed:%M %p}"
     if days_ago == 0:
         return f"today at {clock}"
     if days_ago == 1:
@@ -134,11 +128,10 @@ def _when(path: Path) -> str:
 
 
 def open_in_system(target: Path | str, reveal: bool = False) -> None:
-    """Open a file, folder or link the way a double-click would (or show it in
-    Finder / File Explorer)."""
+    """Open a file, folder or link, or reveal it in Finder / File Explorer."""
     if WINDOWS:
         if reveal:
-            subprocess.run(["explorer", f"/select,{target}"])  # (explorer returns 1 even when it worked)
+            subprocess.run(["explorer", f"/select,{target}"])  # explorer returns 1 even on success
         else:
             os.startfile(str(target))
         return
@@ -146,8 +139,7 @@ def open_in_system(target: Path | str, reveal: bool = False) -> None:
 
 
 def _index_names(words: list[str], root: Path, folders: bool | None = None) -> list[Path]:
-    """Files (folders=False), folders (True) or both (None) whose name has all
-    the words, in that order, from the computer's index."""
+    """Index search by name. folders: False files, True folders, None both."""
     if WINDOWS:
         from dock_agent.win import search
         return search.names(words, root, folders)
@@ -158,7 +150,7 @@ def _index_names(words: list[str], root: Path, folders: bool | None = None) -> l
 
 
 def _index_text(text: str, root: Path) -> list[Path]:
-    """Files with these words in their text (or name), from the computer's index."""
+    """Index search by content or name."""
     if WINDOWS:
         from dock_agent.win import search
         return search.text(text, root)
@@ -176,8 +168,7 @@ def _spotlight(query: str, root: Path) -> list[Path]:
 
 
 def _walk(roots: list[Path], folders: bool):
-    """Yield folders (or files) under `roots`, skipping hidden and system folders.
-    Gives up after MAX_WALK_SECONDS."""
+    """Walk `roots`, skipping hidden and system folders, up to MAX_WALK_SECONDS."""
     deadline = time.time() + MAX_WALK_SECONDS
     for root in roots:
         base_depth = len(root.parts)
@@ -193,16 +184,14 @@ def _walk(roots: list[Path], folders: bool):
 
 
 MAIN_ROOTS = [HOME / "Desktop", HOME / "Documents", HOME / "Downloads"]
-MAIN_DEPTH = 3          # folders people name out loud are rarely deeper
+MAIN_DEPTH = 3
 MAIN_LIMIT = 3000
 MAIN_CACHE_SECONDS = 300
 _main_cache: tuple[float, list[Path]] = (0.0, [])
 
 
 def main_folders() -> list[Path]:
-    """The folders people name out loud: everything up to MAIN_DEPTH levels
-    inside Desktop, Documents and Downloads, shallow ones first (so a big code
-    folder can't crowd them out). Cached for a few minutes."""
+    """Folders up to MAIN_DEPTH deep in Desktop, Documents and Downloads (cached)."""
     global _main_cache
     if time.time() - _main_cache[0] < MAIN_CACHE_SECONDS:
         return _main_cache[1]
@@ -234,10 +223,7 @@ MAX_SPOKEN_NAMES = 80
 
 
 def spoken_folder_names() -> list[str]:
-    """Names of the user's own folders that they might say out loud (CS589,
-    stat310, PipetteCoach...): the folders in Documents and Desktop and one
-    level inside them, but not inside code projects, and not generic names
-    like "src". Used so speech mistakes ("Start 310") can be fixed."""
+    """Folder names the user might say, for correcting speech (skips code projects and generic names)."""
     def is_code(folder: Path) -> bool:
         return any((folder / marker).exists() for marker in CODE_MARKERS)
 
@@ -253,33 +239,29 @@ def spoken_folder_names() -> list[str]:
                 inside += [c.name for c in sorted(first.iterdir()) if c.is_dir() and not c.name.startswith(".")]
     names = [n for n in dict.fromkeys(top + inside)
              if n.lower() not in GENERIC_NAMES and len(n) <= 24 and " copy" not in n and not re.match(r"\d{4}-\d\d", n)]
-    # Class codes first (CS589, stat 310): they're the ones speech gets wrong most.
+    # Class codes first; speech gets them wrong most.
     codes = [n for n in names if re.fullmatch(r"[A-Za-z]{2,5}[ _-]?\d{3}[A-Za-z]?", n)]
     return (codes + [n for n in names if n not in codes])[:MAX_SPOKEN_NAMES]
 
 
 def _name_query(words: list[str]) -> str:
-    # Words only contain a-z and 0-9, so they are safe inside the query.
-    # "stat 310" becomes *stat*310*, which also matches "STAT310" and "Stat-310".
+    # Words are [a-z0-9] only, so they're safe in the query.
     return f'kMDItemFSName == "*{"*".join(words)}*"cd'
 
 
 def find_folders(name: str, walk: bool = True, close: bool = True) -> list[Path]:
-    """Folders whose name matches `name`, best match first. close=False: no
-    near spellings ("start 310" for stat310), only names with all the words."""
+    """Folders matching `name`, best first. close=False disables fuzzy matches."""
     words = _words(name)
     if not words:
         return []
     found = [p for p in _index_names(words, HOME, folders=True) if p.is_dir() and _visible(p)]
     if not found:
-        # Spotlight missed it (or isn't indexing). Quick checks first, among the
-        # user's main folders: all the words, then a very close name for misheard
-        # ones ("start 310" for stat310). The slow deep scan is the last resort.
+        # Spotlight missed it: try the main folders, then fuzzy names, then a deep scan.
         found = [p for p in main_folders() if all(w in _norm(p.name) for w in words)]
     if not found and close:
         folders = {}
         for folder in main_folders():
-            folders.setdefault(_norm(folder.name), folder)  # (the shallowest one wins)
+            folders.setdefault(_norm(folder.name), folder)
         close = difflib.get_close_matches("".join(words), list(folders), n=1, cutoff=0.8)
         found = [folders[close[0]]] if close else []
     if not found and walk:
@@ -314,10 +296,7 @@ def open_folder(name: str, close: bool = True) -> dict:
 
 
 def _folder_in_words(words: list[str]) -> tuple[Path | None, list[str]]:
-    """People often name a folder inside a file request ("my stat310 homework").
-    If one of the words is exactly the name of a folder, return that folder and
-    the other words. When several words name folders, the most specific one
-    (the name with the fewest folders) wins."""
+    """If a word names a folder ("my stat310 homework"), return that folder and the other words."""
     best = None
     for word in words:
         if len(word) < 3:
@@ -331,22 +310,38 @@ def _folder_in_words(words: list[str]) -> tuple[Path | None, list[str]]:
 
 
 def _path_has_words(path: Path, words: list[str]) -> bool:
-    """True if every word appears in the file's name or in one of its folder names."""
+    """True if every word is in the file or folder names."""
     full = _norm("/".join(_user_parts(path) or path.parts))
     return all(word in full for word in words)
 
 
 def _with_words_inside(files: list[Path], words: list[str], root: Path) -> list[Path]:
-    """Files where every word is in the name, a folder name, or the text inside
-    the file (Spotlight indexes the text of PDFs, documents and code). So "stat525
-    hw4" finds Downloads/hw4.Rmd, whose first line says "STAT 525 Homework 4"."""
+    """Files where every word is in the name, a folder name or the file's text."""
     inside = {}
     for word in words:
-        # "stat525" also matches "STAT 525" in the text.
         inside[word] = set(_index_text(" ".join(re.findall(r"[a-z]+|[0-9]+", word)), root))
-    if not files:  # (no folder given: only files Spotlight found can match)
+    if not files:
         files = list(set().union(*inside.values()))
     return [p for p in files if all(word in _norm(str(p)) or p in inside[word] for word in words)]
+
+
+JUST_ADDED_SECONDS = 3600
+
+
+def _added_recently() -> list[Path]:
+    """Files added to the user's folders in the last hour."""
+    if WINDOWS:
+        return []
+    found = []
+    for root in WALK_ROOTS[:2]:
+        try:
+            out = subprocess.run(["mdfind", "-onlyin", str(root), f"kMDItemDateAdded >= $time.now(-{JUST_ADDED_SECONDS})"],
+                                 capture_output=True, text=True, timeout=3).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        found += [Path(line) for line in out.splitlines()
+                  if line and not SKIP_PARTS & set(Path(line).parts) and Path(line).is_file()]
+    return found
 
 
 def find_files(name: str = "", kind: str = "", folder: str = "", days: int = 0) -> dict:
@@ -359,8 +354,7 @@ def find_files(name: str = "", kind: str = "", folder: str = "", days: int = 0) 
         root, words = _folder_in_words(words)
 
     if root is not None:
-        # Inside one folder: match the words against folder names too, so
-        # "homework" finds stat310/homework/Andy_hw3.pdf.
+        # Match words against folder names too.
         everything = list(_walk([root], folders=False))
         candidates = [p for p in everything if _path_has_words(p, words)]
     elif words:
@@ -380,15 +374,19 @@ def find_files(name: str = "", kind: str = "", folder: str = "", days: int = 0) 
         p for p in candidates
         if p.is_file() and _visible(p) and (not extensions or p.suffix.lower() in extensions)
     ]
+    if root == resolve_folder("downloads") and not words:
+        # New files can be saved outside Downloads too.
+        matching += [p for p in _added_recently() if p not in matching and _visible(p)
+                     and (not extensions or p.suffix.lower() in extensions)]
     matching.sort(key=_mtime, reverse=True)
 
     results, note = matching, ("No file has all those words in its name, so these have them inside." if found_inside else "")
     if days:
-        # Calendar days: 1 = today, 2 = since the start of yesterday.
+        # Calendar days: 1 = today, 2 = since yesterday.
         start = (datetime.now() - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
         results = [p for p in matching if _mtime(p) >= start.timestamp()]
         if not results and matching:
-            # People are loose about "yesterday", so show the newest matches instead of nothing.
+            # Loose "yesterday": fall back to the newest matches.
             results = matching
             note = "None of the matches were changed in that time, so these are the newest ones."
 

@@ -1,6 +1,5 @@
-' Starts OneDock on Windows with no console window: double-click this, or the
-' OneDock shortcut that scripts\install.ps1 makes. The log goes to
-' %LOCALAPPDATA%\OneDock\dock.log.
+' Starts OneDock on Windows without a console window.
+' Log: %LOCALAPPDATA%\OneDock\dock.log
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 scripts = fso.GetParentFolderName(WScript.ScriptFullName)

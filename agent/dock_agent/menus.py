@@ -1,7 +1,4 @@
-"""Read and press menu items of the app in front, using the macOS
-Accessibility API. Needs Accessibility permission (System Settings ->
-Privacy & Security -> Accessibility) for the app that runs the agent
-(for example Terminal)."""
+"""Read and press menu items of the front app via the macOS Accessibility API."""
 
 import os
 import time
@@ -19,7 +16,7 @@ from ApplicationServices import (
     kAXValueCGSizeType,
 )
 
-# Bits of AXMenuItemCmdModifiers. Command is on unless the "no command" bit is set.
+# AXMenuItemCmdModifiers bits.
 SHIFT, OPTION, CONTROL, NO_COMMAND = 1, 2, 4, 8
 
 CACHE_SECONDS = 300
@@ -35,8 +32,7 @@ class MenuItemDisabled(Exception):
 
 
 def check_permission(prompt: bool = False) -> bool:
-    """True if the agent may use Accessibility. With prompt=True, macOS shows
-    its "allow this app" dialog."""
+    """Whether Accessibility is allowed. prompt=True shows the system dialog."""
     if prompt:
         return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
     return bool(AXIsProcessTrusted())
@@ -47,7 +43,7 @@ def _get(element, attribute):
     return value if error == 0 else None
 
 
-# Keys that macOS reports as special characters or glyph codes: (symbol, spoken).
+# Special keys: (symbol, spoken).
 SPECIAL_KEYS = {
     "\r": ("↩", "Return"), "\x03": ("⌤", "Enter"), "\t": ("⇥", "Tab"), " ": ("Space", "Space"),
     "\x1b": ("⎋", "Escape"), "\x08": ("⌫", "Delete"), "\x7f": ("⌫", "Delete"),
@@ -60,14 +56,14 @@ SPECIAL_GLYPHS = {
 
 
 def _shortcut(item) -> tuple[str, str]:
-    """Return the shortcut as symbols ("⇧⌘B") and as words ("Shift Command B")."""
+    """Shortcut as symbols ("⇧⌘B") and words ("Shift Command B")."""
     key = _get(item, "AXMenuItemCmdChar")
     glyph = _get(item, "AXMenuItemCmdGlyph")
     if glyph in SPECIAL_GLYPHS:
         key, key_spoken = SPECIAL_GLYPHS[glyph]
-    elif isinstance(glyph, int) and 111 <= glyph <= 122:  # F1 to F12
+    elif isinstance(glyph, int) and 111 <= glyph <= 122:
         key = key_spoken = f"F{glyph - 110}"
-    elif key and 0xF704 <= ord(key[0]) <= 0xF70F:  # F1 to F12 sent as a private character
+    elif key and 0xF704 <= ord(key[0]) <= 0xF70F:  # F-keys as private-use characters
         key = key_spoken = f"F{ord(key[0]) - 0xF703}"
     elif key in SPECIAL_KEYS:
         key, key_spoken = SPECIAL_KEYS[key]
@@ -96,7 +92,7 @@ def _walk(menu, path: list[str], items: list[dict]) -> None:
     for item in _get(menu, "AXChildren") or []:
         title = _get(item, "AXTitle")
         if not title:
-            continue  # separators have no title
+            continue
         item_path = path + [title]
         submenus = _get(item, "AXChildren") or []
         if submenus:
@@ -113,7 +109,7 @@ def _walk(menu, path: list[str], items: list[dict]) -> None:
 
 
 def front_window(pid: int) -> tuple[str, str]:
-    """Title and document path of the app's focused window ("" if unknown)."""
+    """Title and document path of the focused window."""
     from urllib.parse import unquote, urlparse
     app = AXUIElementCreateApplication(pid)
     window = _get(app, "AXFocusedWindow") or _get(app, "AXMainWindow")
@@ -123,12 +119,11 @@ def front_window(pid: int) -> tuple[str, str]:
     return str(_get(window, "AXTitle") or ""), unquote(urlparse(str(document)).path) if document else ""
 
 
-_last_other_app = None  # the last app in front that wasn't Dock itself
+_last_other_app = None
 
 
 def front_app() -> tuple[str, int]:
-    """The app the user is working in. If Dock's own window is in front (its
-    chat box or settings), that's the app they were using just before."""
+    """The user's app (the previous one if Dock itself is in front)."""
     global _last_other_app
     app = NSWorkspace.sharedWorkspace().frontmostApplication()
     if int(app.processIdentifier()) == os.getpid() and _last_other_app is not None:
@@ -139,7 +134,7 @@ def front_app() -> tuple[str, int]:
 
 
 def read_menus(pid: int, use_cache: bool = True) -> list[dict]:
-    """Every menu item of the app, e.g. {"path": ["Modify", "Split Clip"], "shortcut": "⌘B", ...}."""
+    """All menu items, e.g. {"path": ["Modify", "Split Clip"], "shortcut": "⌘B", ...}."""
     if not check_permission():
         raise PermissionMissing()
     cached = _cache.get(pid)
@@ -147,24 +142,22 @@ def read_menus(pid: int, use_cache: bool = True) -> list[dict]:
         return cached[1]
     menu_bar = _get(AXUIElementCreateApplication(pid), "AXMenuBar")
     items: list[dict] = []
-    for top in (_get(menu_bar, "AXChildren") or [])[1:]:  # [0] is the Apple menu
+    for top in (_get(menu_bar, "AXChildren") or [])[1:]:
         title = _get(top, "AXTitle")
         for menu in _get(top, "AXChildren") or []:
             _walk(menu, [title], items)
-    if items:  # an app that is still launching has no menus yet; don't remember that
+    if items:  # launching apps have no menus yet; don't cache
         _cache[pid] = (time.time(), items)
     return items
 
 
 def _elements(pid: int, path: list[str]) -> list:
-    """The menu elements along `path`, e.g. ["Modify", "Split Clip"] gives
-    [the Modify menu bar item, the Split Clip item]."""
+    """Menu elements along `path`."""
     element = _get(AXUIElementCreateApplication(pid), "AXMenuBar")
     found = []
     for depth, title in enumerate(path):
         children = _get(element, "AXChildren") or []
         if depth > 0:
-            # Below the top level, each item's children are wrapped in a menu.
             children = [c for menu in children for c in (_get(menu, "AXChildren") or [])]
         element = next((c for c in children if _get(c, "AXTitle") == title), None)
         if element is None:
@@ -174,8 +167,7 @@ def _elements(pid: int, path: list[str]) -> list:
 
 
 def _rect(element) -> tuple[float, float, float, float] | None:
-    """Where the element is on screen: (x, y, width, height), measured from the
-    top-left of the main screen. None if it isn't showing."""
+    """Element frame as (x, y, width, height), top-left origin, or None."""
     position, size = _get(element, "AXPosition"), _get(element, "AXSize")
     if position is None or size is None:
         return None
@@ -185,7 +177,7 @@ def _rect(element) -> tuple[float, float, float, float] | None:
 
 
 def press(pid: int, path: list[str]) -> None:
-    """Click the menu item at `path`, e.g. ["Modify", "Split Clip"]."""
+    """Click the menu item at `path`."""
     if not check_permission():
         raise PermissionMissing()
     item = _elements(pid, path)[-1]
@@ -195,15 +187,13 @@ def press(pid: int, path: list[str]) -> None:
 
 
 def show(pid: int, path: list[str]) -> tuple[float, float, float, float] | None:
-    """Open the menu so the item can be seen, and return where it is on screen.
-    For items in a submenu (File > Share > File...) this returns the first-level
-    item ("Share"), since submenus only open when hovered."""
+    """Open the menu and return the item's frame (first-level item for submenus)."""
     if not check_permission():
         raise PermissionMissing()
     elements = _elements(pid, path)
     if len(elements) > 1:
         AXUIElementPerformAction(elements[0], "AXPress")
-        for _ in range(20):  # the menu takes a moment to appear
+        for _ in range(20):
             time.sleep(0.03)
             rect = _rect(elements[1])
             if rect:
@@ -212,7 +202,7 @@ def show(pid: int, path: list[str]) -> tuple[float, float, float, float] | None:
 
 
 def close(pid: int, path: list[str]) -> None:
-    """Close the menu that show() opened, if it is still open."""
+    """Close the menu opened by show()."""
     try:
         top = _elements(pid, path[:1])[0]
     except LookupError:

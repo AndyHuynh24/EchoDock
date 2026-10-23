@@ -1,15 +1,4 @@
-"""Google Calendar, the same on Mac and Windows. Connected by "Sign in with
-Google" in Dock's window (google_account.py, which connects Gmail too): Dock
-reads every calendar the user has ticked in Google, with Meet links, and adds
-events only when asked (reminders and deadlines).
-
-What Dock does with it:
-- "what's on today?", "what's next?" (get_schedule)
-- "get ready for stat class" (get_ready): opens the event's Meet/Zoom link,
-  the matching folder or workspace (STAT 310 → stat310), and related notes
-- a heads-up on the phone/Mac EARLY_MINUTES before each event, and focus
-  sessions end before the next event instead of running into it
-"""
+"""Google Calendar: schedule, get-ready, event heads-ups, and adding to-dos when asked."""
 
 import asyncio
 import re
@@ -29,16 +18,26 @@ from dock_server.timefmt import strftime
 GOOGLE_API = "https://www.googleapis.com/calendar/v3"
 CACHE_SECONDS = 300
 EARLY_MINUTES = 10
-TODO_MINUTES = 30          # a to-do from email becomes a block this long, ending at its deadline
-TODO_REMIND_MINUTES = 60   # (for a deadline; a reminder alerts at its time)
-REMINDER_MINUTES = 15      # a reminder ("call Mom at 5") is an event this long
-MORNING_REMINDER_HOUR = 9  # a reminder for a whole day ("on Sunday") alerts then
+TODO_MINUTES = 30  # to-do block length, ending at its deadline
+TODO_REMIND_MINUTES = 60
+REMINDER_MINUTES = 15
+MORNING_REMINDER_HOUR = 9
 DAY_BEFORE_MINUTES = 15 * 60
+# Calendar to-dos double as Dock's list (notes.py).
+WORK = re.compile(r"\b(homework|hw\s?\d*|assignments?|essays?|papers?|reports?|projects?|proposals?|exams?|quiz(zes)?|"
+                  r"midterms?|finals?|due|submit|deadlines?|labs?|problem sets?|psets?)\b", re.IGNORECASE)
+NOT_WORK = re.compile(r"\b(meetings?|presentations?|reviews?|check-?ins?|1:1|calls?|class(es)?|lectures?|office hours|"
+                      r"interviews?|seminars?)\b", re.IGNORECASE)
 LINK = re.compile(r"https://[^\s<>\"']*(?:meet\.google\.com|zoom\.us|teams\.microsoft\.com|webex\.com)[^\s<>\"']*")
 
 
 def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z]+|\d+", text.lower()))
+
+
+def is_todo(event: dict) -> bool:
+    """A to-do Dock added, or an event named like a task."""
+    return event.get("dock", False) or (bool(WORK.search(event["title"])) and not NOT_WORK.search(event["title"]))
 
 
 def _clock(moment: datetime) -> str:
@@ -49,12 +48,12 @@ class Calendar:
     def __init__(self, hub: Hub, notes: Notes):
         self.hub = hub
         self.notes = notes
-        self._told: set[str] = set()  # events Dock already gave a heads-up for
+        self._told: set[str] = set()
         self._google_cache: dict = {}
 
     @property
     def connected(self) -> str:
-        """"google", or "" (not signed in, or Calendar wasn't allowed)."""
+        """"google", or "" if not connected."""
         return "google" if google_account.has(google_account.CALENDAR_READ) else ""
 
     def _google_session(self):
@@ -71,7 +70,7 @@ class Calendar:
         found = []
         for calendar in calendars:
             if not calendar.get("selected", calendar.get("primary", False)):
-                continue  # (only the calendars the user shows in Google Calendar)
+                continue
             reply = session.get(f"{GOOGLE_API}/calendars/{urllib.parse.quote(calendar['id'])}/events", timeout=15, params={
                 "timeMin": start.astimezone().isoformat(), "timeMax": end.astimezone().isoformat(),
                 "singleEvents": "true", "orderBy": "startTime", "maxResults": 100}).json()
@@ -92,7 +91,8 @@ class Calendar:
                     link = match.group() if match else ""
                 found.append({"id": f"{item['id']}@{begins.isoformat()}", "title": item.get("summary", "Untitled"),
                               "start": begins, "end": ends, "all_day": all_day,
-                              "where": str(item.get("location", ""))[:80], "link": link})
+                              "where": str(item.get("location", ""))[:80], "link": link,
+                              "dock": str(item.get("description", "")).startswith("Added by Dock")})
         found.sort(key=lambda e: e["start"])
         self._google_cache[key] = (time.time(), found)
         return found
@@ -102,12 +102,10 @@ class Calendar:
         return google_account.has(google_account.CALENDAR_ADD)
 
     def add_event(self, title: str, due: datetime, all_day: bool = False, deadline: bool = True) -> dict:
-        """Add a to-do to the user's main calendar. A deadline: a short block ending
-        at it, with a reminder an hour before. A reminder ("call Mom at 5"): a short
-        event at that time that alerts right then. Or an all-day event."""
+        """Add a to-do to the main calendar: a deadline block, a timed reminder, or an all-day event."""
         if not self.can_add:
             raise ToolError("To add things to your calendar, sign in with Google in Dock's settings and allow Calendar.")
-        if all_day and not deadline:  # "remind me to call Grandma on Sunday": that morning
+        if all_day and not deadline:
             due, all_day = due.replace(hour=MORNING_REMINDER_HOUR, minute=0), False
         if all_day:
             when = {"start": {"date": due.date().isoformat()}, "end": {"date": (due.date() + timedelta(days=1)).isoformat()}}
@@ -117,7 +115,7 @@ class Calendar:
         else:
             when = {"start": {"dateTime": due.astimezone().isoformat()},
                     "end": {"dateTime": (due + timedelta(minutes=REMINDER_MINUTES)).astimezone().isoformat()}}
-        # (A whole-day deadline's alert counts from its midnight: this is 9 AM the day before.)
+        # 9 AM the day before an all-day deadline.
         remind = DAY_BEFORE_MINUTES if all_day else TODO_REMIND_MINUTES if deadline else 0
         body = {"summary": title, "description": "Added by Dock.",
                 "reminders": {"useDefault": False, "overrides": [{"method": "popup", "minutes": remind}]}, **when}
@@ -129,11 +127,21 @@ class Calendar:
         return reply.json()
 
     def events(self, start: date | datetime, end: date | datetime) -> list[dict]:
-        """Events between start and end, in local time, sorted."""
         if not self.connected:
             return []
         as_time = lambda d: d if isinstance(d, datetime) else datetime.combine(d, datetime.min.time())
         return self._google_events(as_time(start), as_time(end))
+
+    def todos(self, days: int = 7) -> list[dict]:
+        """Calendar to-dos from today through the next `days` days."""
+        if not self.connected:
+            return []
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            return [e for e in self.events(today, today + timedelta(days=days)) if is_todo(e)]
+        except Exception as e:
+            print(f"Couldn't read the to-dos on the calendar: {e!r}")
+            return []
 
     def upcoming(self, hours: float = 12) -> list[dict]:
         now = datetime.now()
@@ -146,8 +154,7 @@ class Calendar:
         return later[0] if later else None
 
     def focus_limit(self, minutes: int) -> tuple[int, dict | None]:
-        """A focus session shouldn't run into the next event: the minutes it may
-        last (0 = until the user stops), and the event that limits it."""
+        """Minutes a focus session may run before the next event (0 = no limit), and that event."""
         coming = self.next_event()
         if coming is None:
             return minutes, None
@@ -164,13 +171,12 @@ class Calendar:
         return f"{event['title']} at {_clock(event['start'])}"
 
     def ensure_watch(self) -> None:
-        """Start the heads-up loop once (called when a screen connects)."""
         if not getattr(self, "_watching", False):
             self._watching = True
             asyncio.get_running_loop().create_task(self.watch())
 
     async def watch(self) -> None:
-        """A heads-up EARLY_MINUTES before each event (on the phone and in the Mac bubble)."""
+        """Heads-up EARLY_MINUTES before each event."""
         while True:
             await asyncio.sleep(60)
             try:
@@ -254,8 +260,8 @@ class Calendar:
             return text
 
     async def _open_for(self, topic: str) -> str:
-        """Open the saved workspace or folder that matches the topic (STAT 310 Lecture → stat310)."""
-        squashed = re.sub(r"\s+(?=\d)", "", topic)  # "STAT 310" -> "STAT310"
+        """Open the workspace or folder that matches the event (STAT 310 Lecture -> stat310)."""
+        squashed = re.sub(r"\s+(?=\d)", "", topic)
         try:
             names = (await self.hub.ask_agent("list_workspaces"))["names"]
             for name in names:

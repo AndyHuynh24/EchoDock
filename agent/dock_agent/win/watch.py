@@ -1,11 +1,5 @@
-"""Watches which app is in front, on Windows (the same as dock_agent/watch.py):
-
-- When the app in front changes, the server gets that app's menus (only
-  those Windows can list without opening anything), for the phone's
-  shortcut pad.
-- Every 30 seconds, if the user is active (touched the keyboard or mouse in
-  the last 2 minutes), the app in front gets 30 seconds of use. This feeds the
-  end-of-day recap. Saved only on this computer, in ~/.dock/activity/.
+"""Watches the front app on Windows: sends its menus for the shortcut pad and logs
+active time per app to ~/.dock/activity/.
 """
 
 import json
@@ -28,7 +22,7 @@ def start() -> None:
 
 
 def announce_front_app() -> None:
-    """Tell the server which app is in front right now (e.g. after reconnecting)."""
+    """Report the current front app."""
     name, pid = menus.front_app()
     if pid:
         threading.Thread(target=_announce, args=(name, pid), daemon=True).start()
@@ -37,7 +31,7 @@ def announce_front_app() -> None:
 def _announce(name: str, pid: int) -> None:
     uia.ready()
     items = []
-    for _ in range(6):  # an app that is still starting has no menus yet
+    for _ in range(6):
         try:
             items = menus.read_menus(pid, use_cache=False, open_menus=False)
         except Exception:

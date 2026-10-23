@@ -1,17 +1,6 @@
-"""Writing help right where the text is, and Google when Dock isn't sure.
+"""Writing help in place (improve_writing, apply_writing) and the Google search offer (search_web).
 
-- improve_writing: the user selects text in any app (an email, a document,
-  a chat box, a web form) and says "fix the grammar", "make this more
-  professional", "make it shorter"... Claude Haiku rewrites it, and Dock
-  shows the suggestion first (on the phone and the Mac, changes marked). The
-  user chooses: Replace (the desktop agent puts it in place of the selection,
-  no copy and paste into another chat app), Insert below (the original stays),
-  or more changes ("make it shorter too" changes the suggestion again).
-  apply_writing does the choice by voice. The app's own Undo (Command Z, or Ctrl+Z on Windows) undoes it.
-- search_web: offers a Google search ("Search Google for …?" with a Search
-  button), for "google X" / "look up X", and when Dock can't find or answer
-  something. Only Search (or "yes") opens it, in a new tab of the user's
-  default browser.
+Suggestions are shown before anything changes; the app's own Undo reverts a replacement.
 """
 
 import asyncio
@@ -27,9 +16,9 @@ from dock_server import bedrock
 from dock_server.hub import Hub
 from dock_server.tools.computer import run_on_computer
 
-MAX_CHARS = 8000  # longer selections: do it in parts
-SUGGESTION_MINUTES = 10  # a suggestion nobody answered is dropped after this
-MARK_CHANGES_ABOVE = 0.5  # mark what changed when this much stays the same, else show it plain
+MAX_CHARS = 8000
+SUGGESTION_MINUTES = 10
+MARK_CHANGES_ABOVE = 0.5
 WRITE_SYSTEM = (
     "You edit someone's text exactly as they ask. Keep their meaning, language, voice, names, numbers, "
     "links and formatting (line breaks, lists, greetings, sign-offs) unless they ask otherwise. For a "
@@ -48,22 +37,20 @@ def google_url(query: str) -> str:
 
 def _clean(answer: str) -> str:
     text = answer.strip()
-    text = re.sub(r"^```[a-z]*\n|\n```$", "", text)  # (in case the model wrapped it anyway)
+    text = re.sub(r"^```[a-z]*\n|\n```$", "", text)
     if len(text) > 1 and text[0] == text[-1] and text[0] in "\"'“”":
         text = text[1:-1]
     return text
 
 
 def _changes(old: str, new: str) -> int:
-    """How many words changed ("libary tomorow" -> "library tomorrow" is 2)."""
+    """Number of words changed."""
     matcher = difflib.SequenceMatcher(None, old.split(), new.split())
     return sum(max(i2 - i1, j2 - j1) for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag != "equal")
 
 
 def _parts(old: str, new: str) -> list[list[str]]:
-    """The suggestion with what changed marked, for the card: [kind, text]
-    pieces, kind "" (the same), "del" (taken out) or "add" (put in). A rewrite
-    that changes most of it is shown plain."""
+    """Diff for the card as [kind, text] pieces ("", "del", "add"). Big rewrites are shown plain."""
     a, b = re.findall(r"\s+|\S+", old), re.findall(r"\s+|\S+", new)
     matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
     if matcher.ratio() < MARK_CHANGES_ABOVE:
@@ -80,8 +67,7 @@ def _parts(old: str, new: str) -> list[list[str]]:
     return parts
 
 
-# The suggestion Dock is showing, waiting for the user's choice:
-# {"pid", "app", "original", "new", "fix", "at"}, or None.
+# Pending suggestion: {"pid", "app", "original", "new", "fix", "at"} or None.
 _suggestion: dict | None = None
 
 
@@ -92,7 +78,7 @@ def suggestion() -> dict | None:
     return _suggestion
 
 
-# The Google search Dock offered: {"query", "at"}, or None.
+# Pending search offer: {"query", "at"} or None.
 _search: dict | None = None
 
 
@@ -110,7 +96,7 @@ def newest_offer() -> str:
 
 
 async def offer_search(hub: Hub, query: str, why: str = "") -> None:
-    """Show "Search Google for …?" with a Search button; nothing opens until the user says so."""
+    """Offer a Google search; nothing opens until the user says so."""
     global _search
     _search = {"query": query.strip(), "at": time.time()}
     await hub.push_phone("search_offer", query=query.strip(), why=why)
@@ -126,7 +112,6 @@ async def search(hub: Hub, query: str) -> str:
 
 
 async def search_from_phone(hub: Hub, message: dict) -> None:
-    """The search card's buttons: Search, or Not now."""
     global _search
     query = (message.get("query") or (search_offer() or {}).get("query") or "").strip()
     if not message.get("go") or not query:
@@ -157,11 +142,11 @@ def voice_context() -> str:
 
 async def _rewrite(how: str, text: str) -> str:
     answer = await asyncio.to_thread(bedrock.ask, f"What they asked: {how}\n\nTheir text:\n{text}", WRITE_SYSTEM,
-                                     min(4000, len(text) // 2 + 400), bedrock.SMART_MODEL_ID)
+                                     min(4000, len(text) // 2 + 400), bedrock.SMART_MODEL_ID, purpose="writing")
     new = _clean(answer)
     if not new:
         raise ToolError("I couldn't rewrite that. Please try again.")
-    # A refusal or an explanation is never offered as the user's new text.
+    # Never offer a refusal as the new text.
     if new.startswith("CANNOT:"):
         raise ToolError(f"I couldn't do that: {new.removeprefix('CANNOT:').strip()}")
     if REFUSAL.match(new) and not REFUSAL.match(text.strip()):
@@ -170,7 +155,7 @@ async def _rewrite(how: str, text: str) -> str:
 
 
 async def apply(hub: Hub, where: str) -> str:
-    """Do what the user chose for the suggestion: replace, below or cancel."""
+    """Apply the user's choice: replace, below or cancel."""
     global _suggestion
     shown = suggestion()
     if not shown:
@@ -179,7 +164,7 @@ async def apply(hub: Hub, where: str) -> str:
         _suggestion = None
         await hub.push_phone("writing_done")
         return "Okay, I left your text as it was."
-    # The selection must still be the text the suggestion is for (else it would land somewhere else).
+    # The selection must still match the original.
     try:
         now = await run_on_computer(hub, "selected_text", timeout=10)
     except ToolError:
@@ -188,12 +173,11 @@ async def apply(hub: Hub, where: str) -> str:
         raise ToolError(f"Select the original text in {shown['app']} again, then say {'replace it' if where == 'replace' else 'put it below'}.")
     original, new = shown["original"], shown["new"].strip()
     if where == "below":
-        # On its own lines under the original (which may end with a line break already).
         await run_on_computer(hub, "insert_below_selection", timeout=10, pid=shown["pid"],
                               text=(new + "\n") if original.endswith("\n") else "\n\n" + new)
         what = "Added it below"
     else:
-        # (Keep the spaces or line break the selection ended with: replacing them would join lines.)
+        # Keep the selection's trailing whitespace.
         await run_on_computer(hub, "replace_selected_text", timeout=10, pid=shown["pid"],
                               text=new + original[len(original.rstrip()):])
         changed = _changes(original, new)
@@ -205,7 +189,6 @@ async def apply(hub: Hub, where: str) -> str:
 
 
 async def from_phone(hub: Hub, message: dict) -> None:
-    """A button on the suggestion card: Replace, Insert below or ×."""
     try:
         await apply(hub, message.get("where", "cancel"))
     except ToolError as e:
@@ -232,7 +215,6 @@ def register(mcp: MCPServer, hub: Hub) -> None:
                 raise
             selected = {"text": "", "app": shown["app"], "pid": shown["pid"]}
         text = selected["text"]
-        # More changes to the suggestion showing ("make it shorter too"), or a new one for other text.
         more = bool(shown) and (not text.strip() or text.strip() == shown["original"].strip())
         if len(text) > MAX_CHARS:
             raise ToolError(f"That's a lot of text ({len(text)} characters). Select up to about {MAX_CHARS} at a time.")

@@ -1,7 +1,4 @@
-"""Dock's spoken replies on the Mac, with macOS's own voice (`say`).
-
-Windows: System.Speech / Windows.Media.SpeechSynthesis (docs/WINDOWS-PORT.md).
-"""
+"""Spoken replies on the Mac with `say`."""
 
 import subprocess
 import threading
@@ -11,7 +8,7 @@ _lock = threading.Lock()
 
 
 def say(text: str, done=None) -> None:
-    """Speak `text` (stopping anything still being said). done() runs when it ends."""
+    """Speak `text`, interrupting anything playing. done() runs at the end."""
     global _process
     stop()
     with _lock:
@@ -32,7 +29,7 @@ def speaking() -> bool:
 
 
 def done_sound() -> None:
-    """A short sound for "done", instead of saying it."""
+    """Play the short "done" sound."""
     from AppKit import NSSound
     NSSound.soundNamed_("Pop").play()
 

@@ -1,10 +1,5 @@
-"""Talking to Dock on Windows: press the talk key once (hotkey.py) or click the
-tray icon, like tapping the face on the phone (the same as dock_agent/talk.py
-on the Mac). The chat box opens and Dock listens ("Listening…", the tray icon
-turns cyan); type instead and it stops listening. When you stop talking (or
-press the key again) Whisper turns your words into text on this computer
-(speech.py, shared with the Mac), and the bubble's page sends them to Dock and
-speaks the answer.
+"""Talking to Dock on Windows: the talk key or a tray click opens the chat box and
+starts listening. Speech is transcribed locally (speech.py).
 """
 
 import threading
@@ -21,19 +16,18 @@ def start() -> bool:
 
 
 def tap() -> None:
-    """The talk key or a click on the tray icon. Listening: send what was said
-    now. Talking: be quiet. Otherwise open the chat box and listen."""
+    """Talk key or tray click: send, stop speaking, or start listening."""
     if _listening:
         _released()
     elif voice_out.speaking():
         voice_out.stop()
-    elif not bubble.just_closed():  # (a click on the tray icon that just closed the chat box)
-        toggle()  # (listen first, then open the chat box: the same order as on the Mac)
+    elif not bubble.just_closed():
+        toggle()
         bubble.compose(True)
 
 
 def _hints() -> list[str]:
-    """Words to expect: the user's folder names, then the front app's menu items (already read, so quick)."""
+    """Hints: folder names, then the front app's menu items."""
     hints = files.spoken_folder_names()[:12]
     try:
         _, pid = menus.front_app()
@@ -46,7 +40,7 @@ def _hints() -> list[str]:
 
 
 def toggle() -> None:
-    """The microphone button in the chat box: start listening, or send what was said."""
+    """Chat box mic button: start listening, or send."""
     if _listening:
         _released()
     else:
@@ -58,7 +52,7 @@ def listening() -> bool:
 
 
 def cancel() -> None:
-    """Clicked again while listening: stop, and send nothing."""
+    """Cancel listening without sending."""
     global _listening
     if not _listening:
         return

@@ -52,9 +52,9 @@ One line per check. Tick it when it works. If one fails, note what you said and 
 - [ ] Tap the phone's face and say "open my downloads" → it works the same as on the Mac.
 - [ ] Restart Dock → the phone reconnects by itself.
 
-## 9. MCP server (for the video)
-- [ ] MCP Inspector (`npx @modelcontextprotocol/inspector`, Streamable HTTP) on the phone address + `/mcp` with `Authorization: Bearer <.dock-token>` → it connects (protocol 2025-11-25) and lists 28 tools. Without the token → refused.
+## 9. MCP server
+- [ ] MCP Inspector (`npx @modelcontextprotocol/inspector`, Streamable HTTP) on the phone address + `/mcp` with `Authorization: Bearer <.dock-token>` → it connects (protocol 2025-11-25) and lists 30 tools. Without the token → refused.
 
 ---
 
-**When you're done:** tell me which boxes failed, with what you said and what happened, and I'll fix them.
+For any failed check, note what you said and what happened, and check `~/Library/Logs/Dock/dock.log`.

@@ -1,9 +1,4 @@
-"""Dock's spoken replies on Windows, with Windows' own voice (SAPI, the voice
-in Settings › Time & language › Speech). The same as dock_agent/voice_out.py
-on the Mac: say(), speaking(), stop() and a short "done" sound.
-
-The voice lives on its own thread (it's COM), and say/stop hand it work.
-"""
+"""Spoken replies on Windows with SAPI, on its own COM thread."""
 
 import queue
 import threading
@@ -13,7 +8,7 @@ SPEAK_ASYNC, PURGE = 1, 2
 
 _jobs: queue.Queue = queue.Queue()
 _speaking = threading.Event()
-_said = 0  # counts requests, so an old "done" doesn't run for a newer one
+_said = 0  # so an old "done" doesn't fire for a newer request
 _lock = threading.Lock()
 
 
@@ -22,7 +17,7 @@ def _run() -> None:
     import win32com.client
     pythoncom.CoInitialize()
     voice = win32com.client.Dispatch("SAPI.SpVoice")
-    current = None  # (number, done) being spoken
+    current = None
     while True:
         try:
             job = _jobs.get(timeout=0.1)
@@ -30,7 +25,7 @@ def _run() -> None:
             job = None
         if job is not None:
             kind, number, text, done = job
-            voice.Speak("", SPEAK_ASYNC | PURGE)  # (stops whatever was being said)
+            voice.Speak("", SPEAK_ASYNC | PURGE)
             current = None
             _speaking.clear()
             if kind == "say" and text:
@@ -50,12 +45,12 @@ threading.Thread(target=_run, daemon=True, name="voice").start()
 
 
 def say(text: str, done=None) -> None:
-    """Speak `text` (stopping anything still being said). done() runs when it ends."""
+    """Speak `text`, interrupting anything playing. done() runs at the end."""
     global _said
     with _lock:
         _said += 1
         _jobs.put(("say", _said, text, done))
-    _speaking.set()  # (right away, so speaking() is true from now on)
+    _speaking.set()
 
 
 def speaking() -> bool:
@@ -71,5 +66,5 @@ def stop() -> None:
 
 
 def done_sound() -> None:
-    """A short sound for "done", instead of saying it."""
+    """Play the short "done" sound."""
     winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)

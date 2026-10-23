@@ -1,18 +1,8 @@
-"""Quick capture: "note: ask the professor about Q3", "remind me to email
-Nancy", "remind me to call Mom at 5", "I need to submit the form by Friday
-noon", "what's on my list?", "mark email Nancy done".
+"""Quick notes and to-dos ("remind me to call Mom at 5", "what's on my list?").
 
-Each note remembers which app and document the user was in when they said
-it. Dock brings the open ones up when a focus session starts (the ones that
-match the goal first) and in the day recap, and any MCP client (Alexa+ in the
-kitchen too) can ask what's left. Kept in .data/notes.json.
-
-A to-do with a time also goes on the user's Google Calendar (when Dock may add
-events there, calendar_link.py): a reminder ("call Mom at 5") alerts at that
-time; a deadline ("by Friday noon") is a block ending then, with an alert an
-hour before. Without the calendar, Dock reminds the user itself at that time
-(a card and a sound on the phone or in the Mac bubble). To-dos from email
-(mail.py) come in the same way.
+Notes remember the app and document they were made in and are stored in
+.data/notes.json. To-dos with a time go on Google Calendar when connected, and the
+list reads them back from there; otherwise Dock shows its own reminder.
 """
 
 import asyncio
@@ -33,22 +23,22 @@ NOTES_FILE = DATA_DIR / "notes.json"
 FILLER = re.compile(r"^(note|remember|remind me|to ?do|add)( to| that)?[:,]?\s+", re.IGNORECASE)
 
 
-REMIND_EARLY_MINUTES = 60  # Dock's own alert for a deadline comes this early
+REMIND_EARLY_MINUTES = 60
 
 
 def parse_when(text, roll: bool = False) -> tuple[datetime, bool] | None:
-    """ "2026-10-16 17:00" (or "2026-10-16" for a whole day) as (moment, all_day);
-    None if there's none or it's already over. roll: a time earlier today means
-    tomorrow ("remind me at 5", said at 10 pm)."""
+    """Parse "YYYY-MM-DD HH:MM" (or a date) into (moment, all_day), or None if past.
+    roll: a time earlier today means tomorrow.
+    """
     for form, all_day in (("%Y-%m-%d %H:%M", False), ("%Y-%m-%dT%H:%M", False), ("%Y-%m-%d", True)):
         try:
             moment = datetime.strptime(str(text or "").strip()[:16 if not all_day else 10], form)
         except ValueError:
             continue
         if roll and not all_day and moment.date() == date.today() and moment <= datetime.now():
-            moment += timedelta(days=1)  # ("at 5pm", said at 10 pm: tomorrow at 5)
+            moment += timedelta(days=1)
         if 0 < (date.today() - moment.date()).days < 31:
-            moment = _next_month(moment)  # ("the 1st", said on the 16th: next month's 1st)
+            moment = _next_month(moment)
         over = moment + timedelta(days=1) if all_day else moment
         return (moment, all_day) if over > datetime.now() else None
     return None
@@ -61,7 +51,7 @@ def _next_month(moment: datetime) -> datetime:
 
 
 def when_text(due: tuple[datetime, bool]) -> str:
-    """ "tonight at 11:59 PM", "tomorrow at 9 AM", "Friday", "Oct 30"..."""
+    """"tonight at 11:59 PM", "tomorrow at 9 AM", "Friday", "Oct 30"."""
     moment, all_day = due
     days = (moment.date() - date.today()).days
     day = ("today" if moment.hour < 18 or all_day else "tonight") if days == 0 else "tomorrow" if days == 1 \
@@ -80,7 +70,7 @@ def _words(text: str) -> set[str]:
 class Notes:
     def __init__(self, hub: Hub):
         self.hub = hub
-        self.calendar = None  # set by main.py once the calendar exists (it uses the notes too)
+        self.calendar = None
         self.items: list[dict] = json.loads(NOTES_FILE.read_text()) if NOTES_FILE.exists() else []
         self._watching = False
 
@@ -88,22 +78,39 @@ class Notes:
         DATA_DIR.mkdir(exist_ok=True)
         NOTES_FILE.write_text(json.dumps(self.items, indent=1))
 
-    def open_notes(self, about: str = "") -> list[dict]:
-        """Notes not done yet; the ones that share words with `about` come first."""
-        notes = [n for n in self.items if not n["done"]]
+    def _from_calendar(self) -> list[dict]:
+        """Calendar to-dos as notes, minus the ones crossed off."""
+        crossed = {n["calendar_id"] for n in self.items if n.get("calendar_id") and n["done"]}
+        found = []
+        for event in self.calendar.todos():
+            if event["id"] in crossed:
+                continue
+            deadline = event["title"].startswith("Due: ")
+            # "Due: Submit HW4" -> "Submit HW4"
+            text = re.sub(r"\s*\[[^\]]*\]\s*$", "", event["title"].removeprefix("Due: ")).strip() or event["title"]
+            due = event["end"] if deadline and not event["all_day"] else event["start"]
+            found.append({"id": event["id"], "calendar_id": event["id"], "text": text, "done": False,
+                          "due": due.isoformat(timespec="minutes"), "all_day": event["all_day"],
+                          "deadline": deadline, "on_calendar": True})
+        return found
+
+    def open_notes(self, about: str = "", calendar: bool = True) -> list[dict]:
+        """Open notes plus calendar to-dos, those matching `about` first."""
+        from_calendar = calendar and bool(self.calendar and self.calendar.connected)
+        notes = [n for n in self.items if not n["done"] and not n.get("calendar_id")
+                 and not (from_calendar and n.get("on_calendar"))]
+        if from_calendar:
+            notes += self._from_calendar()
         wanted = _words(about)
-        # (Then the ones with a time, soonest first.)
         return sorted(notes, key=lambda n: (-len(wanted & _words(n["text"] + " " + n.get("document", ""))), n.get("due") or "~"))
 
     async def add(self, text: str, when=None, deadline: bool = False) -> dict:
-        """Add a note. when: "YYYY-MM-DD HH:MM" (or a (moment, all_day) pair) for a
-        to-do with a time; deadline: it's due then (else it's a reminder at that time)."""
+        """Add a note. when: "YYYY-MM-DD HH:MM" or (moment, all_day); deadline: due then, else a reminder."""
         text = FILLER.sub("", text.strip()).strip()
         if not text:
             raise ToolError("What should the note say?")
         due = when if isinstance(when, tuple) else parse_when(when, roll=not deadline) if when else None
         if when and due is None and not isinstance(when, tuple):
-            # (The model then tries again with a future time: "the 1st" in late October is November 1st.)
             raise ToolError(f"{when} has already passed (it's {datetime.now():%Y-%m-%d %H:%M} now). Use a time in the future.")
         where = {}
         try:
@@ -120,21 +127,20 @@ class Notes:
                     await asyncio.to_thread(self.calendar.add_event, f"Due: {text}" if deadline else text, due[0], due[1], deadline)
                     note["on_calendar"] = True
                 except Exception as e:
-                    print(f"Couldn't add {text!r} to the calendar: {e!r}")  # (Dock reminds instead)
+                    print(f"Couldn't add {text!r} to the calendar: {e!r}")
         self.items.append(note)
         self._save()
         return note
 
     @staticmethod
     def describe(note: dict) -> str:
-        """ "submit HW4 (due tonight at 11:59 PM)", "call Mom (today at 5 PM)"."""
+        """"submit HW4 (due tonight at 11:59 PM)"."""
         due = _due_of(note)
         if not due:
             return note["text"]
         return f"{note['text']} ({'due ' if note.get('deadline') else ''}{when_text(due)})"
 
     def confirm(self, note: dict) -> str:
-        """What Dock says after adding a note."""
         due = _due_of(note)
         if not due:
             return f"Noted: {note['text']}."
@@ -145,7 +151,7 @@ class Notes:
         early = " an hour before" if note.get("deadline") and not due[1] else ""
         return f"Okay: {self.describe(note)}. I'll remind you{early}."
 
-    # ---- Dock's own reminders (for to-dos with a time that aren't on a calendar) ----
+    # ---- reminders for timed to-dos not on a calendar ----
 
     def ensure_watch(self) -> None:
         if not self._watching:
@@ -159,7 +165,7 @@ class Notes:
 
     async def check_reminders(self) -> None:
         now = datetime.now()
-        for note in self.open_notes():
+        for note in self.open_notes(calendar=False):
             due = _due_of(note)
             if not due or note.get("on_calendar") or note.get("reminded"):
                 continue
@@ -178,9 +184,18 @@ class Notes:
         best = max(self.open_notes(), key=lambda n: len(wanted & _words(n["text"])), default=None)
         if best is None or not wanted & _words(best["text"]):
             return None
-        best["done"] = True
+        if best.get("calendar_id"):
+            self.items.append({"id": int(time.time() * 1000), "calendar_id": best["calendar_id"], "text": best["text"],
+                               "added": datetime.now().isoformat(timespec="minutes"), "done": True})
+        else:
+            best["done"] = True
         self._save()
         return best
+
+    def is_listed(self, text: str) -> bool:
+        """Whether a similar to-do is already listed."""
+        wanted = _words(text)
+        return any(len(wanted & _words(n["text"])) >= min(2, len(wanted)) for n in self.open_notes()) if wanted else False
 
     def spoken_list(self, notes: list[dict], limit: int = 5) -> str:
         if not notes:

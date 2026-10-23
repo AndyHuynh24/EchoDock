@@ -1,20 +1,9 @@
-"""App-aware help: "where's the split tool?" and "do it".
+"""App help: "where's the split tool?" and "do it".
 
-1. The desktop agent reads every menu item of the app in front.
-2. We look for the item: first a plain keyword match, and if that doesn't
-   give exactly one answer, Claude Haiku on Bedrock picks from the list.
-   Not in the menus? Then the window's own buttons (toolbar icons and other
-   named controls, read the same way), and last, Dock looks: one screenshot
-   of just that window, Claude Haiku says roughly where the control is, and
-   a sharp close-up of that area pins it down (two looks, about $0.005).
-   "Do it" then presses that button or clicks that spot.
-   Web search for items that aren't in the menus (e.g. Chrome's Translate,
-   which is only a button) is turned off for now: set DOCK_WEB_SEARCH=on to
-   use it. It costs about $0.03 per search, so it only runs when the menus
-   don't have the answer.
-3. We say where it is and its shortcut, show it on the phone, and the agent
-   opens the menu and points at the item on screen.
-4. "Do it" clicks that same menu item.
+The agent reads the front app's menus; a keyword match runs first, then the model
+picks from the list. If the item isn't in the menus, Dock checks the window's
+controls, then a screenshot. The answer is spoken, shown on the phone, and pointed
+to on screen. Web search is off unless DOCK_WEB_SEARCH=on.
 """
 
 import asyncio
@@ -46,7 +35,9 @@ PICK_SYSTEM = (
     "You match what a user asks for to one menu item of a Mac app. Think about what the user "
     "wants to happen, not about shared words: in an editor, \"split screen\" or \"two files side "
     "by side\" means splitting the editor (Split Right, Split Editor), not Full Screen; \"make the "
-    "text bigger\" means Zoom In or Bigger. Only pick an item that does what they asked, not one "
+    "text bigger\" means Zoom In or Bigger; getting back something deleted earlier (\"I deleted a "
+    "paragraph yesterday\") means the version history (Browse All Versions, Version History), not "
+    "going back to the last save, which loses newer work. Only pick an item that does what they asked, not one "
     "that is merely related; if none does, answer 0 (Dock then looks it up on the web).\n"
     'Reply with only JSON: {"why": "a few words", "item": <number>}'
 )
@@ -57,9 +48,7 @@ def _words(text: str) -> set[str]:
 
 
 def keyword_match(question: str, items: list[dict]) -> dict | None:
-    """The single item whose menu path contains every important word of the
-    question, with at least one in the item's own name ("programmer view"
-    matches View > Programmer)."""
+    """The single item whose path contains every important word of the question."""
     wanted = _words(question) - STOP_WORDS
     if not wanted:
         return None
@@ -68,7 +57,6 @@ def keyword_match(question: str, items: list[dict]) -> dict | None:
         if wanted <= _words(" ".join(item["path"])) and wanted & _words(item["path"][-1])
     ]
     if len(matches) > 1:
-        # "minimize this window": Minimize, not Minimize All (its own name has a word not asked for).
         matches = [item for item in matches if _words(item["path"][-1]) - STOP_WORDS <= wanted]
     return matches[0] if len(matches) == 1 else None
 
@@ -80,29 +68,26 @@ def bedrock_match(question: str, app: str, items: list[dict]) -> dict | None:
         for n, item in enumerate(items, start=1)
     ]
     prompt = f"App: {app}\nQuestion: {question}\n\nMenu items:\n" + "\n".join(lines)
-    # Claude Haiku: in our tests Nova Lite often picked a related item instead of the
-    # right one ("open the terminal" -> Split Terminal). About $0.005 per question.
-    answer = bedrock.ask(prompt, PICK_SYSTEM, 80, bedrock.SMART_MODEL_ID)
+    answer = bedrock.ask(prompt, PICK_SYSTEM, 80, bedrock.SMART_MODEL_ID, purpose="menu match")
     number = re.search(r'"item"\s*:\s*(\d+)', answer) or re.search(r"\d+", answer)
     n = int(number.group(1) if number.groups() else number.group()) if number else 0
     return items[n - 1] if 1 <= n <= len(items) else None
 
 
-WEB_SEARCH = os.environ.get("DOCK_WEB_SEARCH", "").lower() == "on"  # off for now
+WEB_SEARCH = os.environ.get("DOCK_WEB_SEARCH", "").lower() == "on"
 WEB_SYSTEM = (
     "You are a voice assistant helping someone use a Mac app right now. Look up how to do what they "
     "ask in that app, preferring the app maker's official help pages. Answer in at most two short "
     "spoken sentences that say exactly where to click or what to press. No lists, no markdown, no links."
 )
-# App names as macOS shows them, and what to call them in a web search.
+# App names as macOS shows them, for web searches.
 SEARCH_NAMES = {"Code": "Visual Studio Code", "Chrome": "Google Chrome"}
-# History and bookmarks are the user's own pages, not features: leave them out.
-# (The Window menu stays: it has Minimize, Zoom and Move to…, besides the list of windows.)
+# Leave out history and bookmarks.
 SKIP_MENUS = {"History", "Bookmarks", "Favorites", "Help"}
 
 
 def web_answer(question: str, app: str) -> tuple[str, str]:
-    """How to do it, from the web. Returns the spoken answer and its source's site."""
+    """Answer from the web. Returns the answer and its source site."""
     name = SEARCH_NAMES.get(app, app)
     answer, sources = bedrock.ask_web(f"App: {name} on macOS\nQuestion: {question}", WEB_SYSTEM)
     site = re.sub(r"^https?://(www\.)?", "", sources[0]).split("/")[0] if sources else ""
@@ -117,32 +102,31 @@ VISION_SYSTEM = (
     '"where": "a few words, like top right of the toolbar", "box": [left, top, right, bottom]} '
     'with the box in pixels of this image, or {"found": false}.'
 )
-ZOOM = (480, 300)  # the close-up around the first guess, in screen points
-# VS Code puts shortcuts in names: "Toggle Panel (⌘J)", or "Toggle Panel (Ctrl+J)" on Windows.
+ZOOM = (480, 300)  # screen points
+# VS Code puts shortcuts in names: "Toggle Panel (⌘J)".
 SHORTCUT_IN_NAME = re.compile(r"\s*\(((?:[⌃⌥⇧⌘]|(?:Ctrl|Alt|Shift|Win)\+)[^)]*)\)")
 KEY_WORDS = {"⌃": "Control ", "⌥": "Option ", "⇧": "Shift ", "⌘": "Command "}
 WINDOWS_KEY_WORDS = {"ctrl": "Control", "alt": "Alt", "shift": "Shift", "win": "Windows", "del": "Delete", "esc": "Escape", "+": "Plus"}
 
 
-# Questions get the arrow ("how do I knit this?", "where's export?", "show me how
-# to split the screen"); anything else is a command and Dock just does it
-# ("knit the document", "undo", "can you split the screen").
-TEACH_ME = re.compile(r"^(how|where|what|which|is there|are there|show me|teach me|explain|find)\b|show me how|where (is|are|do)",
-                      re.IGNORECASE)
+# Questions get an arrow; anything else is a command and Dock does it.
+TEACH_ME = re.compile(r"^(how|where|what|which|is there|are there|show me|teach me|explain|find|can i|could i|is it possible)\b"
+                      r"|show me how|where (is|are|do)", re.IGNORECASE)
 
 
 def wants_to_learn(question: str) -> bool:
-    return bool(TEACH_ME.search(question.strip().lower().replace("where's", "where is").replace("what's", "what is")))
+    text = question.strip().lower().replace("where's", "where is").replace("what's", "what is")
+    return any(TEACH_ME.search(sentence.strip()) for sentence in re.split(r"(?<=[.?!])\s+", text))
 
 
 def spoken_keys(shortcut: str) -> str:
-    if re.match(r"(Ctrl|Alt|Shift|Win)\+", shortcut):  # Windows: "Ctrl+Shift+J" -> "Control Shift J"
+    if re.match(r"(Ctrl|Alt|Shift|Win)\+", shortcut):
         return " ".join(WINDOWS_KEY_WORDS.get(k.lower(), k) for k in re.split(r"\+(?=.)", shortcut))
     return "".join(KEY_WORDS.get(c, c) for c in shortcut).replace("  ", " ").strip()
 
 
 def control_items(controls: list[dict]) -> list[dict]:
-    """The window's controls in the same shape as menu items, so the same matching works."""
+    """Window controls shaped like menu items, so the same matching works."""
     items = []
     for control in controls:
         found = SHORTCUT_IN_NAME.search(control["name"])
@@ -155,13 +139,12 @@ def control_items(controls: list[dict]) -> list[dict]:
 
 
 def vision_find(question: str, app: str, shot: dict) -> dict | None:
-    """Ask Claude Haiku where the control is in the window screenshot. Returns
-    {"name", "where", "rect"} with rect in screen points, or None."""
+    """Locate a control in the window screenshot. Returns {"name", "where", "rect"} or None."""
     image = base64.b64decode(shot["image"])
     prompt = f"App: {app}\nQuestion: {question}\nThe image is {shot['width']} x {shot['height']} pixels."
     response = bedrock.converse(
         [{"role": "user", "content": [{"image": {"format": "png", "source": {"bytes": image}}}, {"text": prompt}]}],
-        VISION_SYSTEM, max_tokens=150, model=bedrock.SMART_MODEL_ID)
+        VISION_SYSTEM, max_tokens=150, model=bedrock.SMART_MODEL_ID, purpose="vision")
     answer = bedrock.message_text(response["output"]["message"])
     match = re.search(r"\{.*\}", answer, re.DOTALL)
     try:
@@ -171,7 +154,7 @@ def vision_find(question: str, app: str, shot: dict) -> dict | None:
     box = reply.get("box")
     if not reply.get("found") or not (isinstance(box, list) and len(box) == 4):
         return None
-    # From screenshot pixels to screen points.
+    # Screenshot pixels to screen points.
     x0, y0, width, height = shot["bounds"]
     sx, sy = width / shot["width"], height / shot["height"]
     left, top, right, bottom = (float(v) for v in box)
@@ -179,8 +162,7 @@ def vision_find(question: str, app: str, shot: dict) -> dict | None:
     return {"name": str(reply.get("name") or "that control")[:60], "where": str(reply.get("where") or "")[:80], "rect": rect}
 
 
-# Answers are short: they're spoken, and the arrow on screen and the card on the
-# phone already show where it is (and that "do it" clicks it).
+# Keep answers short; the arrow and the phone card show the rest.
 DO_IT_HINT = "Say “do it” to click it"
 
 
@@ -198,8 +180,6 @@ def spoken_answer(item: dict) -> str:
 
 
 def done_text(name: str, shortcut_spoken: str = "") -> str:
-    # (Dock's own voice stays quiet for commands and plays a sound; other
-    # assistants calling this tool, like Alexa+, say this.)
     return f"Done: {name}." + (f" Next time, press {shortcut_spoken}." if shortcut_spoken else "")
 
 
@@ -220,26 +200,26 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
         the shortcut, so the user can learn it. do_it true/false overrides that.
         Not for: reading or summarizing text (read),
         greetings, or questions about what Dock itself can do."""
-        if do_it is None:
+        # A question always gets the arrow first, never a click.
+        if do_it is None or wants_to_learn(question):
             do_it = not wants_to_learn(question)
         if app.strip():
             await run_on_computer(hub, "bring_app_forward", name=app)
         front = await run_on_computer(hub, "app_menus")
-        app, items = front["app"], front["items"]  # (the app now in front)
+        app, items = front["app"], front["items"]
         item = keyword_match(question, items)
         if item is None:
             item = await asyncio.to_thread(bedrock_match, question, app, items)
         if item is None:
-            # Not in the menus: the window's own buttons, then a look at the window.
+            # Not in the menus: window controls, then a screenshot.
             answer = await find_on_screen(question, app, front["pid"], do_it)
             if answer:
                 return answer
         if item is None and not WEB_SEARCH:
-            # Not sure: offer a Google search instead of a dead end (free; the user taps Search).
+            # Not sure: offer a Google search.
             await offer_search(hub, f"{SEARCH_NAMES.get(app, app)} {question}", why=f"Not in the {app} menus")
             return f"I couldn't find that in {app}. Want me to search Google for it?"
         if item is None:
-            # Not in the menus: ask the web.
             try:
                 answer, site = await asyncio.to_thread(web_answer, question, app)
             except Exception as e:
@@ -258,8 +238,7 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
             item = dict(item, enabled=fresh["enabled"])
         will_do = do_it and item["enabled"] and not is_risky(name, question)
         if not will_do:
-            # Teaching: one card (the item, its menu and shortcut) and an arrow
-            # on screen. (A problem with the arrow isn't an error.)
+            # Show the card and point at the item.
             menu = " › ".join(_name(title) for title in item["path"][:-1])
             await hub.push_phone("card", title=name, shortcut=item["shortcut"],
                                  detail=f"{menu} menu · " + (DO_IT_HINT if item["enabled"] else "greyed out right now"))
@@ -272,7 +251,7 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
 
         state.questions.append((date.today(), app, name))
         key = (app, tuple(item["path"]))
-        if item["shortcut"]:  # (for the focus break's flashcards)
+        if item["shortcut"]:
             state.shortcuts_seen[key] = {"app": app, "name": name, "shortcut": item["shortcut"], "path": list(item["path"])}
         await savings.add("found")
         times_asked[key] = times_asked.get(key, 0) + 1
@@ -284,8 +263,7 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
         return text
 
     async def find_on_screen(question: str, app: str, pid: int, do_it: bool) -> str | None:
-        """Find it among the window's named buttons, or else by looking at a
-        screenshot of the window. Returns the spoken answer, or None."""
+        """Find the control by name, or in a screenshot. Returns the spoken answer or None."""
         try:
             seen = await run_on_computer(hub, "window_controls", timeout=8)
         except ToolError:
@@ -313,7 +291,6 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
             keys = f" Or press {item['shortcut_spoken']}." if item["shortcut_spoken"] else ""
             return f"It's the {name} {item['role'].lower()}{' in the toolbar' if toolbar else ''}.{keys}"
 
-        # Last: look at the window.
         try:
             shot = await run_on_computer(hub, "window_screenshot", timeout=15)
         except ToolError as e:
@@ -328,8 +305,7 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
         if spot is None:
             print(f"Looked at the {app} window for {question!r}: not found")
             return None
-        # Small icons are easy to miss by a few pixels in the shrunk screenshot,
-        # so take a sharp close-up around the first guess and look again.
+        # Take a close-up around the first guess and look again.
         x, y, w, h = spot["rect"]
         try:
             zoom = await run_on_computer(hub, "screen_region", timeout=10,
@@ -345,8 +321,7 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
         last_suggestion.clear()
         last_suggestion.update(app=app, pid=pid, spot=[x + w / 2, y + h / 2], name=name)
         await savings.add("found")
-        # Found by looking, it's a good guess, not a sure thing: Dock circles it and
-        # only clicks when the user says "do it" (never by itself, even for a command).
+        # A visual match is circled but only clicked on "do it".
         await hub.push_phone("card", title=name, detail=f"Found by looking at the window · {DO_IT_HINT}")
         await run_on_computer(hub, "highlight_spot", rect=spot["rect"], label=f"{name}?")
         return f"I think it's the {name}{where}." + (" Say do it and I'll click it." if do_it else "")
@@ -361,9 +336,9 @@ def register(mcp: MCPServer, hub: Hub, state: State, savings: Savings) -> None:
         name = last_suggestion.get("name") or _name(last_suggestion["path"][-1])
         if is_risky(name):
             raise ToolError(f"To be safe, I won't click {name} by voice. Please click it yourself.")
-        if "control" in last_suggestion:  # a button in the window
+        if "control" in last_suggestion:
             await run_on_computer(hub, "press_control", pid=last_suggestion["pid"], number=last_suggestion["control"])
-        elif "spot" in last_suggestion:  # a spot Dock found by looking
+        elif "spot" in last_suggestion:
             x, y = last_suggestion["spot"]
             await run_on_computer(hub, "click_spot", pid=last_suggestion["pid"], x=x, y=y)
         else:

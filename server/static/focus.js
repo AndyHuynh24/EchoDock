@@ -1,12 +1,7 @@
 // Dock phone web app: focus mode.
-// Started from the small Focus button (top left) or by voice. During a session
-// the stage shows the countdown ring; the face only comes back when it has
-// something to say: you stepped away, you drifted off task, or welcome back.
-// The assistant keeps working during a session.
-// The server keeps the real session clock; this page counts the seconds
-// between updates, and uses the front camera to tell
-// the server "at desk" or "away". The video never leaves the phone: face
-// detection (MediaPipe) runs right here in the browser.
+//
+// Shows the countdown ring and reports desk presence. Face detection (MediaPipe) runs
+// in the browser; only "at desk" / "away" is sent to the server.
 
 const MEDIAPIPE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const FACE_MODEL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
@@ -17,13 +12,13 @@ const RING = 2 * Math.PI * 90;
 let focusState = { state: "idle" };
 let receivedAt = Date.now();
 let chosenMinutes = 50;
-let nudge = null;        // { text, detail } while drifting
-let welcomeUntil = 0;    // show "Welcome back!" until then
+let nudge = null;
+let welcomeUntil = 0;
 let doneAt = 0;
 
 const isLive = (s = focusState.state) => ["running", "away", "paused"].includes(s);
 
-// What the stage should show for focus mode (app.js asks this).
+// What the stage shows during focus (asked by app.js).
 function focusInfo() {
   const s = focusState;
   if (isLive()) {
@@ -37,7 +32,7 @@ function focusInfo() {
   return { live: false };
 }
 
-// ---- the Focus sheet ----
+// ---- focus sheet ----
 
 $("focus-button").addEventListener("click", () => {
   render();
@@ -80,7 +75,7 @@ $("report-again").addEventListener("click", () => {
 
 try { if (localStorage.getItem("dock-focus-tip-seen")) $("focus-tip").hidden = true; } catch {}
 
-// ---- the timer ----
+// ---- timer ----
 
 function clock(seconds) {
   seconds = Math.max(0, Math.round(seconds));
@@ -95,26 +90,25 @@ function render() {
   const focused = (s.focused || 0) + extra;
   const left = s.planned ? s.planned - focused : null;
 
-  // The Focus button shows the time left while a session runs.
   const button = $("focus-button");
   button.classList.toggle("live", live && s.state !== "away");
   button.classList.toggle("away", s.state === "away");
   $("focus-button-text").textContent = !live ? (s.state === "break" ? "Break" : "Focus")
     : s.state === "away" ? "Away" : clock(left ?? focused);
-  // (Mac mode) the countdown goes next to Dock's face in the menu bar.
+  // Mac mode: countdown next to the menu bar face
   const menuBarText = live ? $("focus-button-text").textContent : s.state === "break" ? "Break" : "";
   if (MAC && render.menuBar !== menuBarText) { render.menuBar = menuBarText; native?.postMessage({ focus: menuBarText }); }
 
-  // The sheet: start a session, or control the one running.
   $("focus-start").hidden = live;
   $("focus-live").hidden = !live;
 
   if (live) {
     $("focus-time").textContent = clock(left ?? focused);
+    $("focus-time").classList.toggle("long", $("focus-time").textContent.length > 5);
     $("focus-state").textContent = s.state === "paused" ? "Paused" : left !== null ? "left" : "focused";
     $("focus-goal").textContent = s.goal;
     $("timer-scene").classList.toggle("paused", s.state === "paused");
-    // Planned sessions: the ring empties as time runs out. Open-ended: it fills each hour.
+    // Planned sessions empty the ring; open-ended ones fill it each hour.
     const fraction = left !== null ? Math.max(0, left) / s.planned : (focused % 3600) / 3600;
     $("timer-progress").style.strokeDashoffset = RING * (1 - fraction);
     $("sheet-goal").textContent = s.goal;
@@ -218,7 +212,7 @@ messageHandlers.week_report = (w) => {
   showPanel($("week"));
 };
 
-// ---- desk presence with the front camera ----
+// ---- desk presence ----
 
 let detector = null;
 let stream = null;

@@ -1,20 +1,8 @@
 // Dock phone web app.
-// - The stage shows one thing at a time: Dock's face (idle), the focus timer,
-//   or cards (answers, suggestions, questions) big in the middle. When the
-//   last card goes away, the face (or the timer) comes back.
-// - Shortcuts view: smaller buttons for the app in front on the Mac, with the
-//   cards and "Try saying" examples above them.
-// - Tap to talk is the simulated Alexa+: speech-to-text in the browser, the
-//   server picks and runs Dock tools, and the reply is spoken here.
 //
-// Mac mode (?screen=mac): the same page runs in the Mac's menu-bar bubble
-// (agent/dock_agent/bubble.py). It shows only the cards, the Mac speaks the
-// answers, and when a phone is docked, the cards go there instead.
-//
-// Where the server is: opened from the Mac's own address, it's this page's
-// address. Installed from Dock's fixed web app address (config.js sets
-// DOCK_ADDRESS_URL), it reads the Mac's current address from address.json,
-// so the app keeps working when that address changes.
+// Shows Dock's face, the focus timer, cards and the shortcut pad, and provides
+// tap-to-talk (the simulated Alexa+ voice mode). With ?screen=mac the same page runs
+// in the Mac bubble (agent/dock_agent/bubble.py).
 
 const $ = (id) => document.getElementById(id);
 const ADDRESS_URL = window.DOCK_ADDRESS_URL || "";
@@ -24,40 +12,38 @@ const cardsEl = $("cards");
 let socket = null;
 let serverUrl = "";
 let connected = false;
-let failedTries = 0;    // reconnect attempts in a row that didn't work
-let voiceState = "";    // "", "listening", "thinking" or "speaking"
+let failedTries = 0;
+let voiceState = "";  // "", "listening", "thinking" or "speaking"
 let savedThisWeek = "";
 let celebrateUntil = 0;
 const MAC = new URLSearchParams(location.search).get("screen") === "mac";
-// The desktop app's window around this page: WebKit on the Mac, WebView2 (pywebview) on
-// Windows. pywebview's bridge only exists once the page has loaded, so messages wait for it.
+// Native bridge: WebKit on the Mac, pywebview on Windows (queued until it's ready).
 const windowsQueue = [];
 window.addEventListener("pywebviewready", () => windowsQueue.splice(0).forEach((m) => window.pywebview.api.post(m)));
 const native = window.webkit?.messageHandlers?.dock
   || (MAC ? { postMessage: (m) => (window.pywebview?.api?.post ? window.pywebview.api.post(m) : windowsQueue.push(m)) } : null);
-let phonesDocked = 0;  // (Mac mode) phones connected besides this bubble
-// Every screen (the phone, the Mac bubble) shows the same cards; this one's id
-// tells its own messages apart from the other screens' (see ask()).
+let phonesDocked = 0;  // Mac mode: phones connected besides this bubble
+// Identifies this screen's own messages.
 const SCREEN_ID = Math.random().toString(36).slice(2);
 if (MAC) document.body.classList.add("mac");
 
 function store(key, value) { try { localStorage.setItem(key, value); } catch {} }
 function stored(key) { try { return localStorage.getItem(key) || ""; } catch { return ""; } }
 
-// ---- The pairing token ----
-// The QR code puts it after "#" (never sent to the web host) or "?" (older links).
+// ---- pairing token ----
+// Passed after "#" so it never reaches the web host.
 
 const token = (() => {
   const fromHash = new URLSearchParams(location.hash.slice(1)).get("token");
   const fromQuery = new URLSearchParams(location.search).get("token");
   if (fromHash) {
     store("dock-token", fromHash);
-    history.replaceState(null, "", location.pathname);  // keep it out of the address bar
+    history.replaceState(null, "", location.pathname);
   }
   return fromHash || fromQuery || stored("dock-token");
 })();
 
-// ---- Connection to the server ----
+// ---- connection ----
 
 async function findServer() {
   if (!ADDRESS_URL) return location.origin;
@@ -77,7 +63,6 @@ async function connect() {
     const message = JSON.parse(event.data);
     if (messageHandlers[message.kind]) messageHandlers[message.kind](message);
   };
-  // Phones drop connections often (screen off, Wi-Fi changes), so retry.
   socket.onclose = () => { connected = false; retry(); };
 }
 
@@ -101,14 +86,14 @@ function updateStatus() {
   updateStage();
 }
 
-// What to do with each kind of message from the server. focus.js adds its own.
+// Message handlers by kind (focus.js adds its own).
 const messageHandlers = {};
 
 function send(message) {
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
-// ---- Views: Dock (face) and Shortcuts ----
+// ---- views ----
 
 function setView(view) {
   document.body.dataset.view = view;
@@ -119,7 +104,7 @@ function setView(view) {
 document.querySelectorAll(".view-tab").forEach((tab) => tab.addEventListener("click", () => setView(tab.dataset.view)));
 if (stored("dock-view") === "pad") setView("pad");
 
-// ---- The stage: face, timer or cards ----
+// ---- stage: face, timer or cards ----
 
 function visiblePanels() {
   return [...cardsEl.children].filter((p) => !p.hidden && !p.classList.contains("leaving"));
@@ -129,7 +114,6 @@ function updateStage() {
   const count = visiblePanels().length;
   cardsEl.dataset.count = count;
   const focus = typeof focusInfo === "function" ? focusInfo() : { live: false };
-  // During focus the timer stays (no face): "Away", "Back to …?" and "Welcome back!" show under it.
   document.body.dataset.stage = count ? "cards" : focus.live ? "timer" : "face";
   $("timer-moment").textContent = focus.live && focus.faceMoment ? focus.line : "";
   $("timer-scene").dataset.mood = focus.live && focus.faceMoment ? focus.mood : "";
@@ -137,7 +121,7 @@ function updateStage() {
   if (MAC) tellBubble();
 }
 
-// (Mac mode) Tell the bubble window whether to show, and how tall to be.
+// Mac mode: tell the bubble window whether to show and how tall to be.
 function tellBubble() {
   const shown = visiblePanels().length > 0;
   const height = shown ? Math.ceil(cardsEl.getBoundingClientRect().height) + 16 : 0;
@@ -148,12 +132,12 @@ function tellBubble() {
 if (MAC) new ResizeObserver(() => tellBubble()).observe(cardsEl);
 if (MAC) window.addEventListener("load", () => native?.postMessage({ ready: true }));
 
-// Watch the cards: whenever one appears or goes away, the stage updates.
 new MutationObserver(updateStage).observe(cardsEl, { subtree: true, childList: true, attributes: true, attributeFilter: ["hidden"] });
 
 function showPanel(panel) {
   panel.classList.remove("leaving");
   panel.hidden = false;
+  panel.shownAt = Date.now();
 }
 
 // Slide a card away, then hide it.
@@ -169,25 +153,30 @@ function closePanel(panel, then) {
   }, 220);
 }
 
-// Answers and info cards go away by themselves after a while.
-function hideLater(panel, ms) {
+// Closing a card closes it on every screen.
+function dismiss(panel, then) {
+  if (panel.id) send({ kind: "close_card", id: panel.id });
+  closePanel(panel, then);
+}
+
+// Answers and info cards close themselves after a while, on every screen.
+function hideLater(panel, ms, { everywhere = true } = {}) {
   clearTimeout(panel.hideTimer);
-  panel.hideTimer = setTimeout(() => closePanel(panel), ms);
+  panel.hideTimer = setTimeout(() => (everywhere ? dismiss(panel) : closePanel(panel)), ms);
 }
 
 cardsEl.addEventListener("click", (event) => {
   const panel = event.target.closest(".panel");
   if (!panel) return;
   if (!event.target.closest("button, input, label") && hush()) return;
-  // × closes a card; tapping an answer or info card closes it too.
-  if (event.target.closest(".close") || (panel.classList.contains("transient") && !event.target.closest("button"))) closePanel(panel);
+  if (event.target.closest(".close") || (panel.classList.contains("transient") && !event.target.closest("button"))) dismiss(panel);
 });
 
-// ---- The face ----
+// ---- face ----
 
 function updateFace(focus) {
   let mood = "happy", line = "", detail = "";
-  if (voiceState === "listening") { mood = "listening"; line = "Listening…"; }
+  if (voiceState === "listening" || (!voiceState && listeningElsewhere)) { mood = "listening"; line = "Listening…"; }
   else if (voiceState === "thinking") mood = "thinking";
   else if (voiceState === "speaking") mood = "speaking";
   else if (!token) { mood = "sleepy"; line = "Scan the QR code on your Mac to pair"; detail = "Open localhost:8000/setup on the Mac."; }
@@ -198,13 +187,12 @@ function updateFace(focus) {
     face.classList.remove(`mood-${face.dataset.mood}`);
     face.classList.add(`mood-${mood}`);
     face.dataset.mood = mood;
-    if (!["happy", "sleepy", "offline"].includes(mood)) wake();  // e.g. "Welcome back!" lights the screen up
+    if (!["happy", "sleepy", "offline"].includes(mood)) wake();
   }
   const lineEl = $("face-line");
   const idle = !line && !focus?.mood && voiceState === "" && connected;
-  $("face-scene").classList.toggle("idle", idle);  // shows the suggestions next to the face
+  $("face-scene").classList.toggle("idle", idle);
   if (idle) {
-    // Idle: one short, friendly line.
     lineEl.replaceChildren(...(savedThisWeek
       ? ["Dock saved you ", Object.assign(document.createElement("b"), { textContent: savedThisWeek }), " this week"]
       : ["Tap me and ask anything"]));
@@ -214,7 +202,7 @@ function updateFace(focus) {
   $("face-detail").textContent = detail;
 }
 
-// Blink now and then, and glance around when idle.
+// Blink and glance around when idle.
 (function blink() {
   if (!["sleepy", "offline", "celebrate", "paused"].includes(face.dataset.mood)) {
     face.classList.add("blink");
@@ -232,24 +220,17 @@ function updateFace(focus) {
   setTimeout(glance, 6000 + Math.random() * 6000);
 })();
 
-// Tap the face (or anywhere around it): the phone is the trigger. The chat box
-// opens on the Mac (to type with the Mac's keyboard) AND the phone listens.
-// Typing on the Mac stops the listening; talking closes the Mac's box. With
-// no Mac connected, the phone's own typing box opens instead.
-// (Anywhere on the stage outside a card: the face, the focus timer, or the empty
-// space while a card slides away.)
+// Tapping the stage starts listening and opens the Mac chat box.
 $("stage").addEventListener("click", (event) => {
   if (!event.target.closest(".panel, .chip, button, input, a")) typeOrTalk();
 });
 
-// While Dock listens or talks, a tap anywhere stops it (not only on its card,
-// which can be small; buttons and text boxes still do their own thing).
+// While Dock listens or talks, a tap anywhere stops it.
 document.addEventListener("click", (event) => {
   if (MAC || event.target.closest("button, input, textarea, select, a, label, dialog")) return;
   if (hush()) { event.stopPropagation(); event.preventDefault(); }
 }, true);
 
-// Tap again while Dock listens: cancel. Tap while it talks: stop talking.
 // Returns true if it stopped something.
 function hush() {
   if (voiceState === "listening") {
@@ -264,16 +245,26 @@ function hush() {
 
 function setVoice(state) {
   voiceState = state;
-  document.body.dataset.voice = state;
+  document.body.dataset.voice = state || (listeningElsewhere ? "listening" : "");
   updateStage();
 }
 
-// ---- Shortcuts drawn as keys ----
+// The computer is listening: mirror it on the phone.
+let listeningElsewhere = false;
+let listeningElsewhereTimer = null;
+function showListeningElsewhere(on) {
+  listeningElsewhere = on;
+  clearTimeout(listeningElsewhereTimer);
+  if (on) { wake(); listeningElsewhereTimer = setTimeout(() => showListeningElsewhere(false), 30000); }  // fallback in case "stopped" never arrives
+  setVoice(voiceState);
+}
+
+// ---- shortcuts as keys ----
 
 function shortcutView(shortcut) {
   const wrap = document.createElement("span");
   if (!shortcut) return wrap;
-  if (/^(Ctrl|Alt|Shift|Win)\+/.test(shortcut)) {  // Windows: "Ctrl+Shift+S"
+  if (/^(Ctrl|Alt|Shift|Win)\+/.test(shortcut)) {
     wrap.className = "keys";
     wrap.append(...shortcut.split(/\+(?=.)/).map((k) => Object.assign(document.createElement("kbd"), { textContent: k })));
     return wrap;
@@ -288,19 +279,17 @@ function shortcutView(shortcut) {
   return wrap;
 }
 
-// ---- Cards ----
+// ---- cards ----
 
-// While Dock is answering a request, its cards wait for the reply, so the card,
-// the voice and the arrow on screen all show up together, and the card takes
-// the place of the "thinking" answer (one thing on screen, not two).
-let asking = null;  // { held: [show functions] } for the request being answered
+// While a request is being answered, hold its cards until the reply arrives.
+let asking = null;
 function holdForAnswer(show) {
   if (!asking) return false;
   asking.held.push(show);
   return true;
 }
 
-// Play a card's "coming out of the face" animation again if it's already showing.
+// Replay a card's entrance animation.
 function replay(panel) {
   if (panel.hidden) return;
   panel.style.animation = "none";
@@ -314,18 +303,18 @@ function showCard(card) {
   $("card").classList.remove("done");
   replay($("card"));
   $("card-title").textContent = title || "";
+  $("card").classList.toggle("long", (title || "").length > 70);
   $("card-shortcut").replaceChildren(...(shortcut ? [shortcutView(shortcut)] : []));
   $("card-detail").textContent = detail || "";
   showPanel($("card"));
-  // A shortcut to learn stays a while; other news goes quickly.
-  hideLater($("card"), shortcut ? 12000 : Math.min(15000, 5000 + (detail || "").length * 40));
+  hideLater($("card"), shortcut ? 12000 : Math.min(30000, 5000 + ((title || "").length + (detail || "").length) * 40));
 }
 
-// Something Dock just did ("✓ Show Ruler"): a check, the name, and the
-// shortcut for next time. No talking, just a short sound (see ask()).
+// "✓ Show Ruler": a done card with the shortcut, plus a short sound.
 function showDone(done) {
   if (holdForAnswer(() => showDone(done))) return;
   const { title, shortcut, detail } = done;
+  $("card").classList.remove("long");
   $("card").classList.add("done");
   replay($("card"));
   $("card-title").textContent = title || "Done";
@@ -338,7 +327,7 @@ function showDone(done) {
 let audio = null;
 function doneSound() {
   if (MAC) { native?.postMessage({ sound: "done" }); return; }
-  try {  // two soft notes, made here (no sound file to load)
+  try {  // two soft notes, generated
     audio = audio || new AudioContext();
     audio.resume?.();
     const now = audio.currentTime;
@@ -356,17 +345,14 @@ function doneSound() {
   } catch {}
 }
 
-// "✓ Split Clip", for things that just worked: the ✓ card, the same on every screen.
 function showToast({ text }) {
   showDone({ title: text.replace(/^✓\s*/, "") });
 }
 
-// Shortcut coach: when the user keeps asking for (or clicking) the same item,
-// and when they use a shortcut Dock taught them.
 function showTip(tip) {
   if (holdForAnswer(() => showTip(tip))) return;
   const { title, shortcut, detail, sound } = tip;
-  if (sound) doneSound();  // (e.g. an email that's let through during focus)
+  if (sound) doneSound();
   $("tip-title").textContent = title || "";
   $("tip-shortcut").replaceChildren(...(shortcut ? [shortcutView(shortcut)] : []));
   $("tip-detail").textContent = detail || "";
@@ -383,7 +369,7 @@ function showAnswer(you, text, thinking = false) {
   showPanel($("answer"));
 }
 
-// ---- Time saved ----
+// ---- time saved ----
 
 function showSavings({ week }) {
   savedThisWeek = week || "";
@@ -392,26 +378,32 @@ function showSavings({ week }) {
   updateStage();
 }
 
-// ---- "Try saying" examples for the app in front ----
+// ---- "Try saying" examples ----
 
 const chip = (text) => Object.assign(document.createElement("button"), { type: "button", className: "chip", textContent: text });
 
 function showExamples(app, examples) {
   if (!examples || !examples.length) return;
   $("try-chips").replaceChildren(...examples.map(chip));
-  showFaceTips(examples);
 }
 
-// Up to four of them next to the face: two on each side in landscape.
+// General suggestions next to the face: briefing, workspaces, tidy-up.
+let workspaceNames = [];
+function generalTips() {
+  const spaces = workspaceNames.slice(0, 2).map((name) => `Open my ${name} workspace`);
+  return ["Brief me on my to-dos and email", ...spaces, "Tidy up my downloads",
+          "Save these windows as a workspace", "What's on my calendar today?"].slice(0, 4);
+}
+
 function showFaceTips(examples) {
   const few = examples.slice(0, 4);
   const half = Math.ceil(few.length / 2);
   $("face-tips-left").replaceChildren(...few.slice(0, half).map(chip));
   $("face-tips-right").replaceChildren(...few.slice(half).map(chip));
 }
-showFaceTips([...$("try-chips").children].map((c) => c.textContent));
+showFaceTips(generalTips());
 
-// Tapping an example asks Dock, as if it was said out loud.
+// Tapping an example asks Dock.
 for (const id of ["try-chips", "face-tips-left", "face-tips-right"]) {
   $(id).addEventListener("click", (event) => {
     const tapped = event.target.closest(".chip");
@@ -421,7 +413,15 @@ for (const id of ["try-chips", "face-tips-left", "face-tips-right"]) {
   });
 }
 
-// ---- Shortcut pad ----
+// ---- shortcut pad ----
+
+// "⇧⌘B" -> ["⇧", "⌘", "B"]; "Ctrl+Shift+S" -> ["Ctrl", "Shift", "S"]
+function shortcutKeys(shortcut) {
+  if (!shortcut) return [];
+  if (shortcut.includes("+") && shortcut.length > 1) return shortcut.split("+").filter(Boolean);
+  const modifiers = shortcut.match(/^[⌃⌥⇧⌘]*/)[0];
+  return [...modifiers, shortcut.slice(modifiers.length)].filter(Boolean);
+}
 
 function showPad({ app, buttons, examples }) {
   showExamples(app, examples);
@@ -429,9 +429,9 @@ function showPad({ app, buttons, examples }) {
   $("pad").replaceChildren(...buttons.map((button) => {
     const el = Object.assign(document.createElement("button"), { type: "button", className: "pad-button" });
     const title = Object.assign(document.createElement("span"), { className: "pad-title", textContent: button.title });
-    // Kept plain: the name, and its shortcut as small text.
-    const shortcut = Object.assign(document.createElement("span"), { className: "pad-shortcut", textContent: button.shortcut || "" });
-    el.append(title, shortcut);
+    const keys = Object.assign(document.createElement("span"), { className: "pad-keys" });
+    keys.append(...shortcutKeys(button.shortcut).map((key) => Object.assign(document.createElement("kbd"), { textContent: key })));
+    el.append(title, keys);
     el.addEventListener("click", () => {
       send({ kind: "press", path: button.path });
       el.classList.add("pressed");
@@ -441,7 +441,7 @@ function showPad({ app, buttons, examples }) {
   }));
 }
 
-// ---- Tidy Downloads checklist ----
+// ---- Downloads tidy-up ----
 
 function showPlan({ moves, questions }) {
   $("plan-moves").replaceChildren(...moves.map((move, index) => {
@@ -459,8 +459,7 @@ function showPlan({ moves, questions }) {
   showMoreHint($("plan-moves"));
 }
 
-// A long list scrolls inside its card (so the buttons stay in view); a fade
-// at the bottom shows there's more below.
+// Long lists scroll inside the card, with a fade at the bottom.
 function showMoreHint(list) {
   requestAnimationFrame(() => list.classList.toggle("more", list.scrollTop + list.clientHeight < list.scrollHeight - 2));
 }
@@ -469,11 +468,11 @@ function showMoreHint(list) {
 $("plan-move").addEventListener("click", () => {
   const items = [...document.querySelectorAll("#plan-moves input:checked")].map((box) => Number(box.value));
   if (items.length) send({ kind: "move", items });
-  closePanel($("plan"));
+  dismiss($("plan"));
 });
-$("plan-cancel").addEventListener("click", () => closePanel($("plan")));
+$("plan-cancel").addEventListener("click", () => dismiss($("plan")));
 
-// ---- New downloads and Save windows: "Put it in …?" ----
+// ---- folder suggestions ----
 
 function makeButton(text, className, onClick) {
   const el = Object.assign(document.createElement("button"), { type: "button", textContent: text, className });
@@ -484,7 +483,7 @@ function makeButton(text, className, onClick) {
 function suggestionItem({ name, question, folder, newFolder, why, buttons }) {
   const item = document.createElement("li");
   const where = Object.assign(document.createElement("div"), { className: "download-to" });
-  // Long folder paths may wrap after a "/", not in the middle of a name.
+  // allow wrapping after "/"
   if (folder) where.append(question, Object.assign(document.createElement("b"), { textContent: folder.replaceAll("/", "/\u200b") }), newFolder ? " (new folder)?" : "?");
   else where.textContent = question;
   const actions = Object.assign(document.createElement("div"), { className: "row" });
@@ -495,7 +494,7 @@ function suggestionItem({ name, question, folder, newFolder, why, buttons }) {
   return item;
 }
 
-// Take one suggestion off the card (the whole card slides away with the last one).
+// Remove one suggestion (the card goes with the last one).
 function removeItem(item) {
   if ($("downloads-list").children.length <= 1) {
     closePanel($("downloads"), () => { item.remove(); updateDownloads(); });
@@ -516,7 +515,6 @@ function showDownload({ file, to, new_folder, why }) {
     name: file, question: "Put it in ", folder: to, newFolder: new_folder, why,
     buttons: [
       ["Move", "primary", (el) => { send({ kind: "move_download", file }); removeItem(el); }],
-      // Other: start a sentence for the user to finish.
       ["Other…", "secondary other", () => openTyping(`Put ${file} in `)],
       ["Not now", "secondary", (el) => { send({ kind: "keep_download", file }); removeItem(el); }],
     ],
@@ -525,7 +523,7 @@ function showDownload({ file, to, new_folder, why }) {
   addItem(item);
 }
 
-// A Save window is open on the Mac: "Save it in …? Save here / Not now".
+// Save dialog open: "Save it in …?".
 function showSavePanel({ file, to, new_folder, why, app }) {
   hideSavePanel();
   const item = suggestionItem({
@@ -539,7 +537,7 @@ function showSavePanel({ file, to, new_folder, why, app }) {
   addItem(item);
 }
 
-// Suggestions are off: a Save window is open, so ask before using AI on it.
+// Suggestions are off: ask first.
 function showSaveAsk({ file, app }) {
   hideSaveAsk();
   const item = suggestionItem({
@@ -561,7 +559,7 @@ function hideSaveAsk() { removeWhere((item) => item.dataset.save === "ask"); }
 function hideSavePanel() { removeWhere((item) => item.dataset.save); }
 function hideDownload({ file }) { removeWhere((item) => item.dataset.file === file); }
 
-// × on the card: "Not now" (or "No") for every file on it.
+// × means "Not now" for every file on the card.
 $("downloads").querySelector(".close").addEventListener("click", (event) => {
   event.stopPropagation();
   [...$("downloads-list").children].forEach((item) => item.querySelector(".row button:last-child")?.click());
@@ -576,15 +574,34 @@ function updateDownloads() {
     items.length > 1 ? "Where should these go?" : items[0]?.dataset.save ? "Where to save" : "New download";
 }
 
-// ---- Reading out loud ----
+// ---- speech ----
 
-// Chrome stops long utterances early, so speak in sentence-sized pieces.
-// The face talks while the phone speaks. `done` runs when it has finished.
+// Speak in sentence-sized pieces (Chrome cuts long utterances). `done` runs at the end.
 let macSpeechDone = null;
 window.speechDone = () => { const done = macSpeechDone; macSpeechDone = null; setVoice(""); done?.(); };
 
+// Muted: show answers without speaking; `done` still runs.
+let muted = stored("dock-muted") === "1";
+function showMuted() {
+  $("mute-button").classList.toggle("on", muted);
+  $("mute-button").setAttribute("aria-pressed", String(muted));
+  $("mute-button").setAttribute("aria-label", muted ? "Unmute Dock" : "Mute Dock");
+}
+showMuted();
+$("mute-button").addEventListener("click", () => {
+  muted = !muted;
+  store("dock-muted", muted ? "1" : "0");
+  if (muted && window.speechSynthesis) speechSynthesis.cancel();
+  showMuted();
+});
+
 function speak(text, done) {
-  if (MAC) {  // the Mac speaks it (voice_out.py), then calls speechDone()
+  if (muted) {
+    const id = (speak.id = (speak.id || 0) + 1);
+    setTimeout(() => { if (speak.id === id) done?.(); }, Math.min(15000, 4000 + text.length * 50));
+    return;
+  }
+  if (MAC) {  // Mac mode: voice_out.py speaks, then calls speechDone()
     macSpeechDone = done;
     setVoice("speaking");
     native?.postMessage({ say: text });
@@ -605,7 +622,7 @@ function speak(text, done) {
     const utterance = new SpeechSynthesisUtterance(c);
     if (n === 0) utterance.onstart = () => { if (speak.id === id) setVoice("speaking"); };
     if (n === chunks.length - 1) utterance.onend = utterance.onerror = () => {
-      if (speak.id !== id) return;  // a newer speech replaced this one
+      if (speak.id !== id) return;
       setVoice("");
       done?.();
     };
@@ -630,9 +647,9 @@ function startReading({ title, text }) {
 
 $("reading-stop").addEventListener("click", stopSpeaking);
 
-// ---- Email: "what did I miss?" ----
+// ---- email ----
 
-// One email in a list: sender, time, what it's about, and "+ Add to list" for its to-do.
+// One email row: sender, time, gist and an optional to-do button.
 function mailItem(m) {
   const item = document.createElement("li");
   if (m.urgent) item.classList.add("urgent");
@@ -640,7 +657,6 @@ function mailItem(m) {
   top.append(m.from, Object.assign(document.createElement("span"), { className: "mail-when", textContent: m.when }));
   item.append(top, Object.assign(document.createElement("div"), { className: "mail-gist", textContent: m.gist || m.subject }));
   if (m.todo) {
-    // A to-do with a deadline goes on the calendar (with the Google sign-in), else on Dock's list.
     const calendar = m.todo_where === "calendar";
     const label = calendar ? `＋ Add “${m.todo}” to my calendar · due ${m.todo_when}` : `＋ Add “${m.todo}” to my list`;
     item.append(makeButton(label, "secondary small", (event) => {
@@ -663,8 +679,7 @@ function showMail(mail) {
   hideLater($("mail"), 60000);
 }
 
-// The morning briefing: "Today", "Email", "On your list". ask: the morning offer
-// (Brief me / Not now); otherwise the full briefing, with the important emails.
+// Morning briefing card. ask: the Brief me / Not now offer.
 function showBriefing(briefing) {
   if (holdForAnswer(() => showBriefing(briefing))) return;
   const { title, sections, ask } = briefing;
@@ -685,9 +700,9 @@ function showBriefing(briefing) {
   if (!ask) hideLater($("briefing"), 120000);
 }
 $("briefing-yes").addEventListener("click", () => { send({ kind: "briefing", yes: true }); $("briefing-ask").hidden = true; });
-$("briefing-no").addEventListener("click", () => { send({ kind: "briefing", yes: false }); closePanel($("briefing")); });
+$("briefing-no").addEventListener("click", () => { send({ kind: "briefing", yes: false }); dismiss($("briefing")); });
 
-// "Clean up my inbox": what Dock would do, ticked; nothing moves until Clean up.
+// Inbox clean-up checklist; nothing moves until Clean up.
 function showMailPlan(plan) {
   if (holdForAnswer(() => showMailPlan(plan))) return;
   $("mail-plan-list").replaceChildren(...plan.items.map((m, index) => {
@@ -711,15 +726,14 @@ function showMailPlan(plan) {
 }
 $("mail-plan-go").addEventListener("click", () => {
   send({ kind: "mail_cleanup", items: [...document.querySelectorAll("#mail-plan-list input:checked")].map((b) => Number(b.value)) });
-  closePanel($("mail-plan"));
+  dismiss($("mail-plan"));
 });
-for (const id of ["mail-plan-no"]) $(id).addEventListener("click", () => { send({ kind: "mail_cleanup_cancel" }); closePanel($("mail-plan")); });
+for (const id of ["mail-plan-no"]) $(id).addEventListener("click", () => { send({ kind: "mail_cleanup_cancel" }); dismiss($("mail-plan")); });
 $("mail-plan").querySelector(".close").addEventListener("click", () => send({ kind: "mail_cleanup_cancel" }));
 
-// ---- Writing help: the suggestion, with what changed marked ----
+// ---- writing help ----
 
-// Nothing changes in the user's text until they choose: Replace, Insert below,
-// or Change more (say or type what else to change: the suggestion updates).
+// Nothing changes until the user picks Replace, Insert below or Change more.
 function showWriting({ app, parts, title }) {
   if (holdForAnswer(() => showWriting({ app, parts, title }))) return;
   $("writing-title").textContent = `${title} · ${app}`;
@@ -728,16 +742,16 @@ function showWriting({ app, parts, title }) {
   replay($("writing"));
   showPanel($("writing"));
 }
-const useWriting = (where) => { send({ kind: "writing_use", where }); closePanel($("writing")); };
+const useWriting = (where) => { send({ kind: "writing_use", where }); dismiss($("writing")); };
 $("writing-replace").addEventListener("click", () => useWriting("replace"));
 $("writing-below").addEventListener("click", () => useWriting("below"));
 $("writing").querySelector(".close").addEventListener("click", () => send({ kind: "writing_use", where: "cancel" }));
-$("writing-more").addEventListener("click", () => {  // the card stays: the next answer changes it
+$("writing-more").addEventListener("click", () => {
   if (MAC) send({ kind: "open_mac_chat" });
   else listen();
 });
 
-// ---- "Search Google for …?": nothing opens until the user taps Search ----
+// ---- search offer ----
 
 let offeredSearch = "";
 function showSearchOffer({ query, why }) {
@@ -748,11 +762,11 @@ function showSearchOffer({ query, why }) {
   replay($("search"));
   showPanel($("search"));
 }
-$("search-go").addEventListener("click", () => { send({ kind: "search_go", go: true, query: offeredSearch }); closePanel($("search")); });
-$("search-no").addEventListener("click", () => { send({ kind: "search_go", go: false }); closePanel($("search")); });
+$("search-go").addEventListener("click", () => { send({ kind: "search_go", go: true, query: offeredSearch }); dismiss($("search")); });
+$("search-no").addEventListener("click", () => { send({ kind: "search_go", go: false }); dismiss($("search")); });
 $("search").querySelector(".close").addEventListener("click", () => send({ kind: "search_go", go: false }));
 
-// ---- Day recap ----
+// ---- recap ----
 
 function minutesText(m) {
   return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
@@ -767,23 +781,48 @@ function barRow(label, fraction, time) {
   return row;
 }
 
-function showRecap({ day, apps, files, summary }) {
+function showRecap(recap) {
+  if (holdForAnswer(() => showRecap(recap))) return;
+  const { day, apps, summary } = recap;
   $("recap-day").textContent = day;
   $("recap-summary").textContent = summary || "";
   const most = Math.max(1, ...apps.map((a) => a.minutes));
   $("recap-apps").replaceChildren(...apps.map((a) => barRow(a.app, a.minutes / most, minutesText(a.minutes))));
-  $("recap-files").replaceChildren(...files.map((f) => Object.assign(document.createElement("li"), { textContent: f.name })));
   showPanel($("recap"));
   hideLater($("recap"), 90000);
 }
 
-// ---- Asking Dock (typed or spoken) ----
+// ---- asking Dock ----
 
-// Spoken requests get a spoken reply; typed ones are only shown. Commands that
-// just happened ("quiet") get a ✓ card and a short sound, never talk.
+// Spoken requests get spoken replies; typed ones are only shown. Quiet commands get
+// a check mark and a sound. Slow answers get a short waiting line first.
+const BRIEFING_ASK = /\b(good morning|brief me|my briefing|catch me up)\b/i;
+const GREET_AFTER_MS = 2000;
+const WAIT_LINE_AFTER_MS = 2000;
+const GREETINGS = [
+  "Good morning! Let me check your day.",
+  "Morning! Pulling up your day.",
+  "Good morning! One sec, checking your calendar and email.",
+  "Hey, good morning! Let's see what's on today.",
+  "Morning! Grabbing your plan for today.",
+];
+const WAIT_LINES = {
+  question: ["Let me look.", "Let me check.", "Good question, one sec.", "Looking into it."],
+  other: ["One sec.", "On it.", "Working on it.", "Just a moment."],
+};
+const QUESTION = /^(what|where|how|why|when|who|which|is|are|do|does|can|could|should|did)\b|\?\s*$/i;
+let demoMode = false;  // test label: skip the waiting line
+const pickOne = (lines) => lines[Math.floor(Math.random() * lines.length)];
+
 async function ask(text, { spoken }) {
   const me = startAnswer(text);
   let answer, quiet = false;
+  let greeting = null;
+  const briefing = BRIEFING_ASK.test(text);
+  const line = briefing ? pickOne(GREETINGS) : pickOne(WAIT_LINES[QUESTION.test(text) ? "question" : "other"]);
+  const greet = spoken && !(briefing && demoMode) ? setTimeout(() => {
+    greeting = new Promise((said) => speak(line, () => { setVoice("thinking"); said(); }));
+  }, briefing ? GREET_AFTER_MS : WAIT_LINE_AFTER_MS) : null;
   try {
     const response = await fetch(`${serverUrl}/api/voice`, {
       method: "POST",
@@ -796,13 +835,15 @@ async function ask(text, { spoken }) {
   } catch {
     answer = "I can't reach your Mac right now.";
   }
+  clearTimeout(greet);
+  if (greeting) {
+    await greeting;
+    if (briefing) answer = answer.replace(/^Good morning[.!]?\s*/i, "");
+  }
   finishAnswer(me, text, answer, quiet, { speakHere: spoken });
 }
 
-// The other screens show the same request (the server tells them, "asking" and
-// "answered"): the same "thinking" answer, then the same card. Only the screen
-// that was asked speaks or plays the sound; the others' card goes when it has
-// finished speaking ("speech_done").
+// Other screens mirror the request; only the screen that was asked speaks.
 function startAnswer(text) {
   const me = (asking = { held: [] });
   showAnswer(text, "", true);
@@ -813,7 +854,6 @@ function startAnswer(text) {
 function finishAnswer(me, text, answer, quiet, { speakHere, spokenElsewhere = false }) {
   if (asking === me) asking = null;
   setVoice("");
-  // One thing on screen: this request's card if it has one, else the answer.
   const withCard = me.held.length > 0;
   if (withCard || quiet) {
     $("answer").hidden = true;
@@ -826,14 +866,15 @@ function finishAnswer(me, text, answer, quiet, { speakHere, spokenElsewhere = fa
   const shown = withCard || quiet ? $("card") : $("answer");
   if (quiet) { if (speakHere) doneSound(); }
   else if (speakHere && $("reading").hidden) speak(answer, () => finishedSpeaking(shown));
-  else if (spokenElsewhere) hideLater(shown, Math.max(6000, answer.length * 80));  // (or sooner: speech_done)
+  else if (spokenElsewhere) hideLater(shown, Math.max(6000, answer.length * 80), { everywhere: false });
   else if (!withCard) hideLater($("answer"), Math.min(15000, 5000 + answer.length * 50));
 }
 
-let othersAsking = null;  // the request another screen is waiting on
+let othersAsking = null;
 const otherAnswers = {
   asking: ({ from, text }) => {
     if (from === SCREEN_ID) return;
+    if (listeningElsewhere) showListeningElsewhere(false);
     othersAsking = startAnswer(text);
   },
   answered: ({ from, text, reply, quiet, spoken }) => {
@@ -844,24 +885,23 @@ const otherAnswers = {
   },
 };
 
-// Dock has finished saying it: the card goes too, right away (it's in sync with
-// the voice), and on the other screens.
+// Speech finished: close the card here and on the other screens.
 const AFTER_SPEAKING_MS = 900;
 function finishedSpeaking(panel) {
-  hideLater(panel, AFTER_SPEAKING_MS);
-  send({ kind: "speech_done", from: SCREEN_ID });  // the other screens' card goes too
+  hideLater(panel, panel.classList.contains("long") ? 10000 : AFTER_SPEAKING_MS);
+  send({ kind: "speech_done", from: SCREEN_ID });
 }
 
-// ---- Talking on the Mac (Mac mode): called by agent/dock_agent/talk.py ----
+// ---- Mac mode: called by agent/dock_agent/talk.py ----
 
-// Hold the talk key: "Listening…" and the words so far. null: stop showing it.
+// "Listening…" with the words so far; null hides it.
 window.macListening = (words) => {
   if (words === null) { closePanel($("answer")); return; }
-  showAnswer(words, "Listening", true);  // (the dots are animated)
+  showAnswer(words, "Listening", true);
   setVoice("listening");
 };
 
-// The chat box (click Dock's face in the menu bar): type, or click the microphone.
+// Chat box under the menu bar.
 window.macCompose = (open) => {
   toldTyping = false;
   if (!open) { closePanel($("compose")); return; }
@@ -870,19 +910,23 @@ window.macCompose = (open) => {
   setTimeout(() => $("compose-input").focus(), 50);
 };
 
-// The microphone button shows when Dock is listening (talk.py calls this).
-window.macMic = (on) => { $("compose-mic").classList.toggle("on", on); };
+// Show the mic button state.
+let macHearing = false;
+window.macMic = (on) => {
+  macHearing = on;
+  $("compose-mic").classList.toggle("on", on);
+  send({ kind: "listening", on, from: SCREEN_ID });
+};
 
 let toldTyping = false;
 $("compose-input").addEventListener("input", () => {
   if (toldTyping) return;
   toldTyping = true;
-  send({ kind: "mac_typing" });  // the phone stops listening
-  if (voiceState === "listening") native?.postMessage({ listen: "cancel" });  // ...and so does this computer
+  send({ kind: "mac_typing" });
+  if (voiceState === "listening") native?.postMessage({ listen: "cancel" });
 });
 
-// Sending closes the chat box first, so the app's own window has the keyboard
-// focus again: "split the screen" must act on that window, not on Dock's box.
+// Close the chat box first so the user's app gets the keyboard back.
 function sendFromChatBox(text, spoken) {
   $("compose-input").value = "";
   if (!$("compose").hidden) native?.postMessage({ compose: false });
@@ -902,18 +946,18 @@ $("compose-tips").addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (!MAC || event.key !== "Escape") return;
-  if (voiceState === "listening") native?.postMessage({ listen: "cancel" });  // (stop listening too)
+  if (voiceState === "listening") native?.postMessage({ listen: "cancel" });
   if (!$("compose").hidden) native?.postMessage({ compose: false });
 });
 
-// Let go: ask Dock what was said (the answer is shown and spoken).
+// Ask Dock what was said.
 window.macAsk = (text) => {
   if (!text) { setVoice(""); closePanel($("answer")); return; }
-  if (!$("compose").hidden) sendFromChatBox(text, true);  // (talked from the chat box)
+  if (!$("compose").hidden) sendFromChatBox(text, true);
   else ask(text, { spoken: true });
 };
 
-// ---- Typing ----
+// ---- typing ----
 
 const chatInput = $("chat-input");
 
@@ -931,21 +975,16 @@ function closeTyping() {
 }
 
 function typeOrTalk() {
-  send({ kind: "open_mac_chat" });  // (the answer comes back as "mac_chat")
+  send({ kind: "open_mac_chat" });
   listen({ alongsideMac: true });
 }
 
-// The Mac's answer: its chat box is open (type there), or there's no Mac.
-function macChat({ ok }) {
-  if (MAC) return;
-  if (ok) showToast({ text: "⌨ Type on your Mac, or just talk" });
-  else openTyping();
-}
+function macChat() {}
 
 $("type-button").addEventListener("click", () => { openTyping(); listen({ alongsideTyping: true }); });
 $("chat-close").addEventListener("click", () => { stopListening(); closeTyping(); });
 $("chat-mic").addEventListener("click", () => { closeTyping(); listen(); });
-// The first key typed means "I'm typing": stop listening.
+// Typing stops listening.
 chatInput.addEventListener("input", () => { if (voiceState === "listening") stopListening(); });
 $("chat").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -955,38 +994,36 @@ $("chat").addEventListener("submit", (event) => {
   ask(text, { spoken: false });
 });
 
-// ---- Tap to talk ----
+// ---- tap to talk ----
 
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 let recognition = null;
 
-// Listen once. alongsideTyping: the phone's typing box is open too, so its
-// keyboard closes as soon as the user starts talking. alongsideMac: the Mac's
-// chat box is open, so it closes when the user starts talking.
+// Listen once. alongsideTyping / alongsideMac: close the keyboard or Mac chat box when speech starts.
 function listen({ alongsideTyping = false, alongsideMac = false } = {}) {
   if (voiceState === "listening") return;
   if (!Recognition) {
     if (!alongsideTyping) {
       showAnswer("", "This browser can't do speech recognition. Try Chrome, or type instead.");
-      hideLater($("answer"), 8000);
+      hideLater($("answer"), 8000, { everywhere: false });
     }
     return;
   }
   speechSynthesis.cancel();
   recognition = new Recognition();
   recognition.lang = "en-US";
-  recognition.interimResults = true;  // (to notice talking as it starts)
+  recognition.interimResults = true;
   recognition.onstart = () => {
     setVoice("listening");
-    // No face on screen to show it (the focus timer, or the Shortcuts view): a small card does.
+    // No face visible: show a small listening card.
     if (document.body.dataset.stage !== "face" || document.body.dataset.view === "pad") showAnswer("", "Listening", true);
   };
   recognition.onend = () => { if (voiceState === "listening") setVoice(""); recognition = null; };
   recognition.onresult = (event) => {
     const words = [...event.results].map((r) => r[0].transcript).join(" ").trim();
     if (!words) return;
-    if (document.body.classList.contains("typing")) closeTyping();  // talking: put the keyboard away
+    if (document.body.classList.contains("typing")) closeTyping();
     if (alongsideMac) { send({ kind: "close_mac_chat" }); alongsideMac = false; }
     const last = event.results[event.results.length - 1];
     if (last.isFinal) {
@@ -998,17 +1035,39 @@ function listen({ alongsideTyping = false, alongsideMac = false } = {}) {
   };
   recognition.onerror = (event) => {
     if (voiceState === "listening") setVoice("");
-    // (With the typing box open, typing still works, so don't make a fuss.)
     if (event.error !== "no-speech" && event.error !== "aborted" && !alongsideTyping && !alongsideMac) {
       showAnswer("", `Microphone problem: ${event.error}`);
-      hideLater($("answer"), 8000);
+      hideLater($("answer"), 8000, { everywhere: false });
     }
   };
   try {
     recognition.start();
-    setVoice("listening");  // (right away, so a quick second tap already cancels it)
+    setVoice("listening");
   } catch {
     recognition = null;
+  }
+}
+
+// Test remote (remote.html): the tapped phrase is used as the transcript on the listening screen.
+const REMOTE_WORD_MS = 170;
+function heardFromRemote(text) {
+  if (MAC) {
+    if (!macHearing) return;
+    native?.postMessage({ listen: "cancel" });
+    setTimeout(() => window.macListening(""), 150);
+    setTimeout(() => window.macAsk(text), 800);
+  } else if (voiceState === "listening") {
+    if (recognition) {
+      recognition.onresult = recognition.onerror = recognition.onend = null;
+      recognition.abort();
+      recognition = null;
+    }
+    const words = text.split(/\s+/);
+    words.forEach((_, n) => setTimeout(() => showAnswer(words.slice(0, n + 1).join(" "), "Listening", true), n * REMOTE_WORD_MS));
+    setTimeout(() => {
+      send({ kind: "close_mac_chat" });
+      ask(text, { spoken: true });
+    }, words.length * REMOTE_WORD_MS + 350);
   }
 }
 
@@ -1024,9 +1083,7 @@ function stopListening() {
 
 $("talk").addEventListener("click", () => { if (!hush()) { closeTyping(); listen(); } });
 
-// ---- Screen: always on, dimmed while nothing happens ----
-// Browsers can't change the real brightness, so the page itself goes dark.
-// A tap on a dimmed screen wakes it and does what a tap always does (talk).
+// ---- screen: keep awake, dim when idle ----
 
 const DIM_AFTER_MS = 45000;
 let lastActivity = Date.now();
@@ -1043,24 +1100,22 @@ function wake() {
   if (document.body.classList.contains("dim")) document.body.classList.remove("dim");
 }
 
-// Full screen, so Dock also fills the strip beside the camera in landscape.
-// Browsers only allow it right after a tap, so ask on taps until it sticks.
+// Request full screen on tap (not needed when installed as an app).
 function goFullScreen() {
   if (MAC || document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+  if (matchMedia("(display-mode: fullscreen)").matches) return;
   document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => {});
 }
 
 document.addEventListener("pointerdown", () => {
   if (!MAC && !audio && window.AudioContext) { try { audio = new AudioContext(); } catch {} }
   wake();
-  keepAwake();  // some browsers only allow it after a tap
+  keepAwake();
 }, true);
-// (On a touch screen a tap only "counts" when the finger lifts, so ask then.)
 document.addEventListener("pointerup", goFullScreen, true);
 document.addEventListener("click", goFullScreen, true);
 
-// Tell Dock how the screen is shown (full screen or not, the camera notch), so
-// problems like a black bar beside the camera can be seen in Dock's log.
+// Report display mode to the server log for debugging.
 function screenInfo() {
   const probe = document.createElement("div");
   probe.style.cssText = "position:fixed;visibility:hidden;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)";
@@ -1086,18 +1141,22 @@ setInterval(() => {
     || $("face").dataset.mood === "worried";
   if (busy) lastActivity = Date.now();
   document.body.classList.toggle("dim", !MAC && Date.now() - lastActivity > DIM_AFTER_MS);
+  // Reset stray scroll offsets that push the face off center (phone, face only).
+  if (!MAC && document.body.dataset.stage === "face" && document.body.dataset.view === "face"
+      && !document.body.classList.contains("typing")) {
+    if (window.scrollY || document.documentElement.scrollTop) window.scrollTo(0, 0);
+    if ($("main").scrollTop) $("main").scrollTop = 0;
+  }
 }, 1000);
 
-// ---- Sheets: Focus and Settings ----
+// ---- sheets ----
 
 document.querySelectorAll(".sheet").forEach((sheet) => {
   sheet.querySelector(".close").addEventListener("click", () => sheet.close());
-  // Tapping the dark area around the sheet closes it.
   sheet.addEventListener("click", (event) => { if (event.target === sheet) sheet.close(); });
 });
 $("settings-button").addEventListener("click", () => $("settings-sheet").showModal());
 
-// Automatic folder suggestions are off unless the user turns them on (each uses AI).
 $("folder-suggestions").addEventListener("change", (event) => {
   send({ kind: "set_folder_suggestions", on: event.target.checked });
 });
@@ -1106,7 +1165,7 @@ function showSettings({ folder_suggestions }) {
   $("folder-suggestions").checked = Boolean(folder_suggestions);
 }
 
-// ---- Installing Dock as an app ----
+// ---- install as an app ----
 
 let installPrompt = null;
 const installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
@@ -1127,7 +1186,6 @@ window.addEventListener("appinstalled", () => {
   $("install").hidden = true;
   $("install-help").textContent = "Dock is installed. Open it from your home screen.";
 });
-// (The Mac bubble is always next to its server, so it needs no offline copy.)
 if ("serviceWorker" in navigator && !MAC) navigator.serviceWorker.register("sw.js").catch(() => {});
 
 Object.assign(messageHandlers, {
@@ -1137,22 +1195,25 @@ Object.assign(messageHandlers, {
   briefing_done: () => { if (!$("briefing-ask").hidden) closePanel($("briefing")); }, mail_plan_done: () => closePanel($("mail-plan")), pad: showPad, plan: showPlan, download: showDownload, download_done: hideDownload,
   save_panel: showSavePanel, save_panel_done: hideSavePanel, save_ask: showSaveAsk, save_ask_done: hideSaveAsk,
   settings: showSettings, read: startReading, recap: showRecap,
+  close_card: ({ id }) => {
+    const panel = document.getElementById(id);
+    if (panel?.classList.contains("panel") && Date.now() - (panel.shownAt || 0) > 800) closePanel(panel);
+  },
   savings: showSavings,
   say: ({ text, show = true }) => {
-    if (show) showAnswer("", text);  // (show false: a card on screen already shows it)
-    if (MAC && phonesDocked) {  // the docked phone says it; the bubble shows it until then
+    if (show) showAnswer("", text);
+    if (MAC && phonesDocked) {
       if (show) hideLater($("answer"), Math.max(6000, text.length * 80));
       return;
     }
     speak(text, () => finishedSpeaking($("answer")));
   },
   ...otherAnswers,
-  // Another screen finished saying its answer: this screen's card for it goes now.
   speech_done: ({ from }) => {
     if (from === SCREEN_ID || asking || voiceState) return;
-    for (const id of ["card", "answer"]) if (!$(id).hidden) hideLater($(id), AFTER_SPEAKING_MS);
+    for (const id of ["card", "answer"]) if (!$(id).hidden) hideLater($(id), AFTER_SPEAKING_MS, { everywhere: false });
   },
-  // A newer version of this page is on the server: reload (when nothing is going on).
+  // Reload when a newer version of the page is available.
   version: ({ id }) => {
     if (!window.pageVersion) { window.pageVersion = id; return; }
     if (id === window.pageVersion) return;
@@ -1162,13 +1223,16 @@ Object.assign(messageHandlers, {
   },
   mac_chat: macChat,
   stop_listening: () => { if (!MAC) stopListening(); },
+  listening: ({ on, from }) => { if (!MAC && from !== SCREEN_ID) showListeningElsewhere(Boolean(on)); },
+  heard: ({ text }) => heardFromRemote(text),
+  workspaces: ({ names }) => { workspaceNames = names || []; showFaceTips(generalTips()); },
   screens: ({ phones }) => { phonesDocked = phones; },
-  // Which computer Dock runs on: the talk key differs (⌥ Space on a Mac, Alt+Space on Windows).
-  platform: ({ platform, talk_key }) => {
+  platform: ({ platform, talk_key, demo }) => {
+    demoMode = Boolean(demo);
     document.body.dataset.platform = platform;
     $("compose-hint").textContent = `Talk or type · ${talk_key} opens this anywhere · Esc closes`;
   },
 });
 
-// Connect once focus.js has loaded too, so no message arrives before its handlers exist.
+// Connect once focus.js has loaded.
 window.addEventListener("load", () => { updateStatus(); connect(); if (!MAC) keepAwake(); });

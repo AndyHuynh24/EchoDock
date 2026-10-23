@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 .env
 .dock-token
+.dock-mail-folder
 .data/
 OneDock.app/
 server/google_oauth_client.json
@@ -13,3 +14,12 @@ server/google_oauth_client.json
 CLAUDE.md
 .claude/
 PipetteCoach/
+private/
+clients/
+
+# Eval details (the summary, evals/results/LATEST.md, is kept)
+server/evals/results/*.json
+
+# Demo video assets (voice files, recordings)
+video/
+Videos/

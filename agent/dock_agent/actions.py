@@ -1,16 +1,15 @@
-"""The things the desktop agent is allowed to do. Only functions listed in
-ACTIONS can be run by the server; anything else is refused."""
+"""Actions the server may run. Anything not in ACTIONS is refused."""
 
 import os
 import subprocess
 
 from PyObjCTools import AppHelper
 
-from dock_agent import apps, arrange, bubble, files, menubar, menus, onscreen, overlay, reading, recap, savepanel, speech, tidy, workspaces
+from dock_agent import apps, arrange, bubble, documents, files, menubar, menus, onscreen, overlay, reading, recap, savepanel, speech, tidy, workspaces
 
 
 class ActionError(Exception):
-    """A problem worth telling the user about, e.g. an unknown folder."""
+    """An error message meant for the user."""
 
 
 def open_folder(name: str, close: bool = True) -> dict:
@@ -41,8 +40,15 @@ def arrange_windows(layout: list[dict], screen: str = "this", hide_others: bool 
         raise ActionError(str(e))
 
 
+def close_windows(app: str = "", which: str = "front") -> dict:
+    try:
+        return arrange.close_windows(app, which)
+    except arrange.ArrangeError as e:
+        raise ActionError(str(e))
+
+
 def open_url(url: str) -> dict:
-    """Open a web link (e.g. a meeting link from the calendar). Only https links."""
+    """Open an https link."""
     if not url.startswith("https://"):
         raise ActionError("I only open https links.")
     subprocess.run(["open", url], check=True)
@@ -50,12 +56,12 @@ def open_url(url: str) -> dict:
 
 
 def folder_names() -> dict:
-    """The user's own folder names (for fixing speech mistakes)."""
+    """The user's folder names, for correcting speech."""
     return {"names": files.spoken_folder_names()}
 
 
 def find_folder(name: str) -> dict:
-    """The folder with this name (spaces and capitals don't matter), if there is one."""
+    """The folder with this name, ignoring spaces and case."""
     matches = [p for p in files.find_folders(name) if files._norm(p.name) == files._norm(name)]
     return {"folder": matches[0].name, "where": files.where(matches[0])} if matches else {}
 
@@ -86,7 +92,7 @@ def list_workspaces() -> dict:
 
 
 def open_app_names() -> dict:
-    """The apps open right now (for understanding what the user said)."""
+    """Names of running apps."""
     from AppKit import NSApplicationActivationPolicyRegular, NSWorkspace
     names = [str(a.localizedName()) for a in NSWorkspace.sharedWorkspace().runningApplications()
              if a.activationPolicy() == NSApplicationActivationPolicyRegular and a.processIdentifier() != os.getpid()]
@@ -94,9 +100,7 @@ def open_app_names() -> dict:
 
 
 def bring_app_forward(name: str) -> dict:
-    """Bring an open app to the front, so a command like "close the Finder window"
-    acts on Finder even when another app was in front. The name may be a bit off
-    ("fighter" for Finder), as long as it's close to one open app."""
+    """Bring an open app to the front (fuzzy name match)."""
     import difflib
     import time
     from AppKit import NSApplicationActivationPolicyRegular, NSWorkspace
@@ -108,14 +112,13 @@ def bring_app_forward(name: str) -> dict:
         raise ActionError(f"{name} isn't open.")
     app = running[close[0]]
     if NSWorkspace.sharedWorkspace().frontmostApplication().processIdentifier() != app.processIdentifier():
-        # (`open` always may bring an app forward; asking the app directly is refused
-        # while Dock itself isn't the app in front.)
+        # `open` may activate an app even when Dock isn't in front.
         subprocess.run(["open", "-b", str(app.bundleIdentifier())], timeout=5)
         for _ in range(30):
             if NSWorkspace.sharedWorkspace().frontmostApplication().processIdentifier() == app.processIdentifier():
                 break
             time.sleep(0.05)
-        time.sleep(0.2)  # (its menus update for the window now in front)
+        time.sleep(0.2)
     return {"app": str(app.localizedName())}
 
 
@@ -146,7 +149,7 @@ def save_in_folder(folder: str, new_folder: bool = False) -> dict:
 
 
 def read_text(path: str = "") -> dict:
-    if not path:  # (the selection: the user's app needs the keyboard back from Dock's chat box first)
+    if not path:
         _bring_forward(menus.front_app()[1])
     try:
         return reading.read_text(path)
@@ -169,14 +172,14 @@ def permissions() -> dict:
 
 
 def ask_screen_permission() -> dict:
-    """Show macOS's "allow Screen Recording" question for OneDock."""
+    """Ask for Screen Recording permission."""
     onscreen.screen_permission(ask=True)
     subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"])
     return {}
 
 
 def window_controls() -> dict:
-    """Named buttons and controls in the front window (things not in the menus)."""
+    """Named controls in the front window."""
     if not menus.check_permission():
         raise ActionError(NO_PERMISSION)
     return onscreen.window_controls()
@@ -227,7 +230,7 @@ def highlight_spot(rect: list[float], label: str) -> dict:
 
 
 def click_spot(pid: int, x: float, y: float) -> dict:
-    """Click where the AI saw the control (only in the same app, still in front)."""
+    """Click a visually located control (same app, still in front)."""
     overlay.hide()
     _same_app(pid)
     _bring_forward(pid)
@@ -236,31 +239,31 @@ def click_spot(pid: int, x: float, y: float) -> dict:
 
 
 def ask_speech_permission() -> dict:
-    """Show macOS's "allow the microphone" question for OneDock."""
+    """Ask for microphone permission."""
     speech.ask_permission()
     return {}
 
 
 def chat_box(open: bool) -> dict:
-    """Open (or close) the chat box under the menu bar, e.g. when the user taps the phone."""
+    """Toggle the chat box under the menu bar."""
     AppHelper.callAfter(bubble.compose, bool(open))
     return {}
 
 
 def start_at_login(on: bool) -> dict:
-    """Start OneDock.app when the user logs in (or stop doing that)."""
+    """Start at login on or off."""
     AppHelper.callAfter(menubar.apply_start_at_login, bool(on))
     return {}
 
 
 def show_welcome() -> dict:
-    """Open Dock's welcome window (e.g. when OneDock.app is opened again)."""
+    """Open the welcome window."""
     AppHelper.callAfter(bubble.show_welcome)
     return {}
 
 
 def open_accessibility_settings() -> dict:
-    """Show macOS's "allow this app" prompt and open the Accessibility settings."""
+    """Ask for Accessibility permission and open its settings."""
     menus.check_permission(prompt=True)
     subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
     return {}
@@ -272,7 +275,7 @@ def front_app() -> dict:
 
 
 def front_window() -> dict:
-    """The app in front, its window title and open document (for focus mode)."""
+    """Front app, window title and open document."""
     name, pid = menus.front_app()
     title, document = menus.front_window(pid)
     return {"app": name, "pid": pid, "title": title, "document": document}
@@ -283,7 +286,7 @@ def files_changed_since(timestamp: float) -> dict:
 
 
 def app_menus() -> dict:
-    """The app in front and all of its menu items."""
+    """Front app and all its menu items."""
     name, pid = menus.front_app()
     try:
         items = menus.read_menus(pid)
@@ -294,9 +297,7 @@ def app_menus() -> dict:
 
 
 def selection_size() -> dict:
-    """How much text is selected in the user's app (asked through Accessibility
-    only, so it's instant and nothing is copied): helps Dock understand "make it
-    shorter" or "translate this"."""
+    """Length of the selection (via Accessibility, nothing copied)."""
     name, pid = menus.front_app()
     focused = reading._focused(pid)
     text = str(menus._get(focused, "AXSelectedText") or "") if focused is not None else ""
@@ -304,7 +305,7 @@ def selection_size() -> dict:
 
 
 def selected_text() -> dict:
-    """The text selected in the user's app (not Dock's own chat box)."""
+    """The selected text in the user's app."""
     _, pid = menus.front_app()
     _bring_forward(pid)
     try:
@@ -314,27 +315,27 @@ def selected_text() -> dict:
 
 
 def replace_selected_text(pid: int, text: str) -> dict:
-    """Write the improved text over the selection, in the same app."""
+    """Replace the selection with the improved text."""
     _same_app(pid)
     _bring_forward(pid)
     return {"how": reading.replace_selection(pid, text)}
 
 
 def insert_below_selection(pid: int, text: str) -> dict:
-    """Add the improved text under the selection, keeping the original."""
+    """Insert the improved text below the selection."""
     _same_app(pid)
     _bring_forward(pid)
     return {"how": reading.insert_after_selection(pid, text)}
 
 
 def save_panel_text() -> dict:
-    """The start of the document a Save window is saving (for a better folder suggestion)."""
+    """Start of the document in the open Save dialog."""
     _, pid = menus.front_app()
     return {"text": reading.window_text(pid)}
 
 
 def file_start(path: str) -> dict:
-    """The start of a file's text (PDF, Word, text...), or "" if it has none."""
+    """Start of a file's text, or ""."""
     try:
         return {"text": reading.file_text(path)[:reading.WINDOW_TEXT_CHARS]}
     except reading.ReadError:
@@ -342,18 +343,15 @@ def file_start(path: str) -> dict:
 
 
 def menu_item_enabled(pid: int, path: list[str]) -> dict:
-    """Is this menu item usable right now? (The list from app_menus is kept for
-    a few minutes, so its greyed-out states can be old: "Show Ruler" is greyed
-    out with no document open, and fine a moment later.)"""
+    """Whether a menu item is enabled right now (the cached list may be stale)."""
     try:
         return {"enabled": bool(menus._get(menus._elements(pid, path)[-1], "AXEnabled"))}
     except Exception:
-        return {"enabled": None}  # (couldn't tell: keep what the list says)
+        return {"enabled": None}
 
 
 def highlight_menu(pid: int, path: list[str], label: str) -> dict:
-    """Open the menu and point at the item on screen. The menu closes again
-    when the pointer goes away."""
+    """Open the menu and point at the item."""
     try:
         rect = menus.show(pid, path)
     except menus.PermissionMissing:
@@ -367,11 +365,7 @@ def highlight_menu(pid: int, path: list[str], label: str) -> dict:
 
 
 def _bring_forward(pid: int) -> None:
-    """Make sure the user's app has the keyboard before Dock acts in it. While
-    Dock's chat box is open, the box has it, and apps like VS Code then ignore
-    menu commands (nothing of theirs is focused). So: close the chat box, and
-    if Dock itself ended up in front, hand the front back to the app. (macOS
-    only lets the app in front hand over, and only from the main thread.)"""
+    """Give the keyboard back to the user's app (close the chat box first)."""
     import time
     from AppKit import NSRunningApplication, NSWorkspace
     front = lambda: int(NSWorkspace.sharedWorkspace().frontmostApplication().processIdentifier())
@@ -386,17 +380,17 @@ def _bring_forward(pid: int) -> None:
             app.activateFromApplication_options_(NSRunningApplication.currentApplication(), 0)
 
     AppHelper.callAfter(hand_back)
-    for _ in range(20):  # up to 1 s
+    for _ in range(20):
         time.sleep(0.05)
         if front() == pid and not bubble.has_keyboard():
             break
     else:
         print(f"Couldn't give the keyboard back to {app.localizedName()}")
-    time.sleep(0.15)  # (let its window take the keyboard)
+    time.sleep(0.15)
 
 
 def press_menu(pid: int, path: list[str]) -> dict:
-    """Click a menu item, but only in the app that is still in front."""
+    """Click a menu item, only in the app still in front."""
     overlay.hide()
     name, front_pid = menus.front_app()
     if front_pid != pid:
@@ -411,8 +405,7 @@ def press_menu(pid: int, path: list[str]) -> dict:
     except LookupError:
         raise ActionError(f"I couldn't find {path[-1]} in the menus anymore.")
     finally:
-        # If Dock opened this menu to point at the item, clicking the item can
-        # leave the menu open, and an open menu swallows the user's typing.
+        # Close a menu Dock opened, so it doesn't swallow typing.
         menus.close(pid, path)
     return {}
 
@@ -425,6 +418,7 @@ ACTIONS = {
     "find_folder": find_folder,
     "folder_names": folder_names,
     "arrange_windows": arrange_windows,
+    "close_windows": close_windows,
     "open_url": open_url,
     "save_workspace": save_workspace,
     "open_workspace": open_workspace,
@@ -432,6 +426,8 @@ ACTIONS = {
     "open_app_names": open_app_names,
     "bring_app_forward": bring_app_forward,
     "downloads_overview": downloads_overview,
+    "list_documents": documents.list_documents,
+    "document_texts": documents.document_texts,
     "move_files": move_files,
     "undo_moves": undo_moves,
     "point_at_save_folder": point_at_save_folder,
