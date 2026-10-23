@@ -1,6 +1,6 @@
 #!/bin/bash
 # One-time setup for Dock on a Mac. Safe to run again.
-#   git clone <repo> && cd OneDock && ./scripts/install.sh
+#   git clone <repo> && cd EchoDock && ./scripts/install.sh
 # Then open Dock with OneDock.app.
 
 set -e

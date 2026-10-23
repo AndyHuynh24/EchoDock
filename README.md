@@ -25,8 +25,8 @@ Everything goes through the server. More detail: [MCP-SERVER.md](MCP-SERVER.md) 
 
 **Mac**
 ```bash
-git clone https://github.com/AndyHuynh24/OneDock.git
-cd OneDock
+git clone https://github.com/AndyHuynh24/EchoDock.git
+cd EchoDock
 ./scripts/install.sh
 ```
 The installer adds `uv` and `cloudflared` if missing, installs the server and agent, creates a private token (`.dock-token`), builds **OneDock.app** and opens it. The welcome window walks through the permissions (Accessibility, Microphone) and checks the AWS connection. The first start downloads the Whisper speech model (about 480 MB).
@@ -35,8 +35,8 @@ After that, open **OneDock.app**, press **⌥ Space** and say "open my downloads
 
 **Windows**
 ```powershell
-git clone https://github.com/AndyHuynh24/OneDock.git
-cd OneDock
+git clone https://github.com/AndyHuynh24/EchoDock.git
+cd EchoDock
 powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 ```
 Then open **OneDock** from the Start menu and press **Alt+Space** to talk.
@@ -70,6 +70,15 @@ uv run python -m evals.rag            # retrieval and answer quality (no running
 uv run python -m evals.trace_report   # speed and cost from recorded traces
 ```
 Latest results: [server/evals/results/LATEST.md](server/evals/results/LATEST.md), [RAG-LATEST.md](server/evals/results/RAG-LATEST.md).
+
+## Project status
+
+EchoDock was built in a few weeks for the hackathon, so not every feature has been tested to the same level. Everything in the demo video was run for real on a Mac, and tool routing and search are covered by the evals. Some features are implemented but have had little or no real-world testing yet:
+
+- **Windows desktop agent:** written and reviewed on a Mac, not yet run on a Windows PC.
+- **Desk presence in focus mode:** tested with a simulated phone, not yet with a real phone camera.
+
+Expect rough edges outside the paths shown in the demo. Issues and feedback are welcome.
 
 ## Privacy and safety
 

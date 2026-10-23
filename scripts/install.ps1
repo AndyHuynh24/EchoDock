@@ -1,5 +1,5 @@
 # One-time setup for Dock on Windows 10 or 11. Safe to run again.
-#   git clone <repo>; cd OneDock
+#   git clone <repo>; cd EchoDock
 #   powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 # Then open Dock from the Start menu or the desktop shortcut.
 

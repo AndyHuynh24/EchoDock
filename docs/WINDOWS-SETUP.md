@@ -13,8 +13,8 @@ Close PowerShell and open it again, so it finds `git` and `aws`.
 ## 2. Get Dock
 ```powershell
 cd $HOME\Documents
-git clone https://github.com/AndyHuynh24/OneDock.git
-cd OneDock
+git clone https://github.com/AndyHuynh24/EchoDock.git
+cd EchoDock
 ```
 *(Optional, for Google Calendar and Gmail:)* copy `server\google_oauth_client.json` from the Mac into the same folder on the PC. It isn't on GitHub because it holds a secret.
 
