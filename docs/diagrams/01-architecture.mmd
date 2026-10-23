@@ -11,7 +11,7 @@ flowchart TB
     subgraph server ["🧠 Dock server · one Python program"]
         direction LR
         brain["🤖 AI agent<br/><b>/api/voice</b><br/><i>Bedrock picks the tools</i>"]
-        mcp["🔌 MCP server<br/><b>/mcp</b><br/><i>29 tools · Streamable HTTP</i>"]
+        mcp["🔌 MCP server<br/><b>/mcp</b><br/><i>30 tools · Streamable HTTP</i>"]
         hub["🔀 Hub<br/><b>/ws/agent · /ws/phone</b><br/><i>live links to computer + screens</i>"]
         brain == "MCP client<br/>tools/list · tools/call" ==> mcp
         mcp ==> hub

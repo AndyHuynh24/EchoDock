@@ -6,7 +6,7 @@ sequenceDiagram
     C->>S: initialize (protocolVersion 2025-11-25)
     S-->>C: server info + "I have tools"
     C->>S: tools/list
-    S-->>C: 29 tools: name · description · input schema
+    S-->>C: 30 tools: name · description · input schema
     Note over C: The AI reads the descriptions<br/>and picks a tool for what you said
     C->>S: tools/call open_folder {"name": "downloads"}
     S-->>C: "Opened your Downloads folder."
