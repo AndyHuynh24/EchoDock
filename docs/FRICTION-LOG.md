@@ -6,25 +6,7 @@ What we tried with Amazon's tools, what we expected, what actually happened, and
 
 ---
 
-## 1. Alexa+ for Builders: no way to install the CLI or open the simulator
-- **Severity:** Critical
-- **Task:** register Dock's MCP server as an Alexa+ add-on and test it in the Web Simulator, then on our Echo Pop.
-- **Steps:** followed the MCP Toolkit quickstart (Oct 14): `npm install` of `@alexa-ai/cli`, then `alexa-ai new mcp --mcp-server-url …`.
-- **Expected:** the CLI installs, the add-on deploys, and the Web Simulator calls our tools.
-- **Actual:** the CLI package is served from a private CodeArtifact repository, and setup needs an AWS role that an Amazon Solutions Architect provides. The Alexa+ for Builders page says it's "currently available to select partners." The hackathon FAQ later confirmed that no participant can get access.
-- **Workaround:** built the self-hosted MCP server anyway (Streamable HTTP, spec 2025-11-25), plus our own simulated Alexa+: a Bedrock agent that acts as the MCP client (`initialize`, `tools/list`, `tools/call` over Streamable HTTP), behind a Mac menu-bar app and a phone web app.
-- **Suggestion:** state on the track page and the quickstart that the toolkit is partner-only. Offer a public simulator, or a "conformance check" endpoint that calls a server's tools the way Alexa+ would and reports what it would pick.
-
-## 2. Alexa+: real-device limits we couldn't test
-- **Severity:** High
-- **Task:** design tool replies that would pass Alexa+'s limits.
-- **Steps:** read the add-on docs for response times, account linking and follow-up turns.
-- **Expected:** a way to check our server against those limits.
-- **Actual:** the docs mention a response time limit (about 500 ms) and OAuth 2.1 with PKCE for account linking. Without the simulator we couldn't tell whether our ~1 s menu answers would pass, or whether a follow-up like "Alexa, do it" reaches the same add-on.
-- **Workaround:** menu lookups run before any AI call, slow work stays out of the reply, and the server remembers the last thing it pointed at, so "do it" works no matter which client sends it.
-- **Suggestion:** a public test harness that times a tool call the way Alexa+ does, and a doc page on how follow-up turns are routed to add-ons.
-
-## 3. Bedrock: Titan embeddings throttled while indexing, quietly losing data
+## 1. Bedrock: Titan embeddings throttled while indexing, quietly losing data
 - **Severity:** High
 - **Task:** index a real Mac's documents and email for "ask about your stuff" (RAG): about 2,200 chunks with Titan Text Embeddings v2.
 - **Steps:** called `InvokeModel` on `amazon.titan-embed-text-v2:0` from 8 threads with boto3's default retry settings.
@@ -33,7 +15,7 @@ What we tried with Amazon's tools, what we expected, what actually happened, and
 - **Workaround:** a separate boto3 client for embeddings with `retries={"total_max_attempts": 10, "mode": "adaptive"}`, 4 threads instead of 8, and any item with a failed chunk marked so the next refresh tries it again. The full index then built in about 6 minutes, with nothing lost.
 - **Suggestion:** put the default embedding quota (requests per minute) on the model card and in the error message, and offer a batch embedding call for many short texts, so builders don't need dozens of parallel requests.
 
-## 4. Bedrock: newer models refused for our account
+## 2. Bedrock: newer models refused for our account
 - **Severity:** Medium
 - **Task:** compare newer Claude models for tool picking.
 - **Steps:** `Converse` with newer Claude model IDs in `us-east-1`.
@@ -42,25 +24,7 @@ What we tried with Amazon's tools, what we expected, what actually happened, and
 - **Workaround:** stayed on Claude Haiku 4.5 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`), which our eval shows is enough: 130 of 130 test phrases pick the right tool.
 - **Suggestion:** a "models this account can use" list in the console and API, and a self-serve way to request a model, instead of "contact AWS Sales."
 
-## 5. `aws login` sessions expiring mid-session
-- **Severity:** Medium
-- **Task:** use `aws login` credentials with boto3 in a long-running local app.
-- **Steps:** `aws login`, then Dock runs for hours making Bedrock calls.
-- **Expected:** the session lasts the working day, or refreshes by itself.
-- **Actual:** the session expired twice during development (Oct 15 and 16). Every AI call then failed with `LoginRefreshRequired` deep inside botocore's credential refresh, with a long traceback, so the app could only say "something went wrong".
-- **Workaround:** Dock catches that error and says: "My AI login has expired. On the Mac, open Terminal and run aws login."
-- **Suggestion:** longer sessions for `aws login`, or a short, typed exception that's easy to catch and explain to users.
-
-## 6. The AWS MCP server didn't accept `aws login` credentials
-- **Severity:** Low
-- **Task:** use the AWS MCP server in our coding assistant to check Bedrock settings.
-- **Steps:** added the AWS MCP server after `aws login` (Oct 15).
-- **Expected:** it uses the same credentials as the AWS CLI and boto3.
-- **Actual:** it failed to start with "No AWS credentials available", while the AWS CLI and boto3 worked.
-- **Workaround:** used the AWS CLI directly.
-- **Suggestion:** support the `aws login` credential provider in the AWS MCP server.
-
-## 7. Nova 2 Lite: the inference profile ID and `<thinking>` text
+## 3. Nova 2 Lite: the inference profile ID and `<thinking>` text
 - **Severity:** Medium
 - **Task:** use Amazon Nova 2 Lite for small jobs and tool calling.
 - **Steps:** `Converse` with the model ID from the model card.
@@ -69,7 +33,7 @@ What we tried with Amazon's tools, what we expected, what actually happened, and
 - **Workaround:** the `us.` profile ID, and we strip `<thinking>` blocks before speaking.
 - **Suggestion:** show the profile ID first on the model card, and add an option to never return thinking text.
 
-## 8. Nova web grounding: price hard to find, awkward response shape
+## 4. Nova web grounding: price hard to find, awkward response shape
 - **Severity:** Low
 - **Task:** answer "how do I translate a page in Chrome?" from the web, with a source.
 - **Steps:** `Converse` with the `nova_grounding` system tool.
@@ -78,7 +42,7 @@ What we tried with Amazon's tools, what we expected, what actually happened, and
 - **Workaround:** joined the text blocks and kept the first source's site. Turned the feature off by default (`DOCK_WEB_SEARCH=on` enables it) because of the cost.
 - **Suggestion:** put the grounding price next to the model prices, and return a simple "answer + sources" shape.
 
-## 9. Prompt caching: great, but the 5-minute cache is short for a voice assistant
+## 5. Prompt caching: great, but the 5-minute cache is short for a voice assistant
 - **Severity:** Low
 - **Task:** cut the cost of the tool picker, which sends ~7,600 tokens of tools and instructions every request.
 - **Steps:** one `cachePoint` after the tools and one after the fixed instructions in `Converse`.
@@ -87,7 +51,7 @@ What we tried with Amazon's tools, what we expected, what actually happened, and
 - **Workaround:** the request's changing facts (the app in front, the time) go in a system block after the cache point, so the cached part never changes.
 - **Suggestion:** a longer cache time option for apps that are used now and then.
 
-## 10. Amazon S3: hosting a small installable web app took many steps
+## 6. Amazon S3: hosting a small installable web app took many steps
 - **Severity:** Medium
 - **Task:** host the phone web app (a PWA) at a fixed HTTPS address, so its link never changes while the tunnel behind it does.
 - **Steps:** created a bucket and uploaded the files with boto3.
