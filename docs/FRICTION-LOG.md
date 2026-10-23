@@ -1,6 +1,6 @@
 # Friction log: building Dock (Alexa+ track)
 
-What we tried with Amazon's tools, what we expected, what actually happened, and what would fix it. Every entry happened while building Dock between Oct 14 and Oct 19, 2026.
+What we tried with Amazon's tools, what we expected, what actually happened, and what would fix it. Every entry happened while building Dock.
 
 **Severity:** **Critical** = blocked the planned path · **High** = cost hours or broke a feature · **Medium** = needed a workaround · **Low** = an annoyance.
 
