@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
+    </marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#999"/>
+    </marker>
+  </defs>
+  <rect width="1400" height="820" fill="#fff"/>
+
+  <!-- panels -->
+  <rect x="60" y="200" width="1280" height="200" rx="14" fill="#eef3fb" stroke="#5b7db1" stroke-width="2"/>
+  <text x="86" y="236" font-size="22" font-weight="bold" fill="#2f4f80">Dock server</text>
+  <rect x="940" y="440" width="400" height="340" rx="14" fill="#f6f6f6" stroke="#aaa" stroke-width="2"/>
+  <text x="966" y="476" font-size="22" font-weight="bold" fill="#555">Your computer</text>
+
+  <g font-size="24" fill="#1a1a1a" text-anchor="middle" stroke-width="2">
+    <!-- row 1 -->
+    <rect x="110" y="40" width="300" height="96" rx="10" fill="#fff" stroke="#333"/>
+    <text x="260" y="80">Web app</text>
+    <text x="260" y="112" font-size="20" fill="#555">phone or Mac</text>
+
+    <rect x="550" y="40" width="300" height="96" rx="10" fill="#fff" stroke="#999" stroke-dasharray="8 6"/>
+    <text x="700" y="80" fill="#777">Alexa+</text>
+    <text x="700" y="112" font-size="20" fill="#999">not available yet</text>
+
+    <!-- server -->
+    <rect x="110" y="264" width="300" height="96" rx="10" fill="#fff" stroke="#333"/>
+    <text x="260" y="304">AI agent</text>
+    <text x="260" y="336" font-size="20" fill="#555">picks the tools</text>
+
+    <rect x="550" y="264" width="300" height="96" rx="10" fill="#fff" stroke="#333"/>
+    <text x="700" y="304">MCP server</text>
+    <text x="700" y="336" font-size="20" fill="#555">30 tools</text>
+
+    <rect x="990" y="264" width="300" height="96" rx="10" fill="#fff" stroke="#333"/>
+    <text x="1140" y="304">WebSocket hub</text>
+    <text x="1140" y="336" font-size="20" fill="#555">live connections</text>
+
+    <!-- row 3 -->
+    <rect x="110" y="470" width="300" height="80" rx="10" fill="#fff" stroke="#333"/>
+    <text x="260" y="518">Amazon Bedrock</text>
+
+    <rect x="550" y="470" width="300" height="80" rx="10" fill="#fff" stroke="#333"/>
+    <text x="700" y="518">Gmail, Calendar</text>
+
+    <rect x="990" y="510" width="300" height="96" rx="10" fill="#fff" stroke="#333"/>
+    <text x="1140" y="550">Desktop agent</text>
+    <text x="1140" y="582" font-size="20" fill="#555">Mac or Windows</text>
+
+    <rect x="990" y="670" width="300" height="80" rx="10" fill="#fff" stroke="#333"/>
+    <text x="1140" y="718">Apps and files</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#444" stroke-width="2.2" fill="none" marker-end="url(#a)">
+    <line x1="260" y1="138" x2="260" y2="197" marker-start="url(#a)"/>
+    <line x1="410" y1="312" x2="546" y2="312"/>
+    <line x1="850" y1="312" x2="986" y2="312"/>
+    <line x1="260" y1="360" x2="260" y2="466"/>
+    <line x1="700" y1="360" x2="700" y2="466"/>
+    <line x1="1140" y1="360" x2="1140" y2="506" marker-start="url(#a)"/>
+    <line x1="1140" y1="606" x2="1140" y2="666"/>
+  </g>
+  <line x1="700" y1="138" x2="700" y2="260" stroke="#999" stroke-width="2.2" stroke-dasharray="8 6" marker-end="url(#g)"/>
+
+  <!-- labels -->
+  <g font-size="19" fill="#444">
+    <text x="276" y="176">voice in, screen updates out</text>
+    <text x="478" y="300" text-anchor="middle">MCP</text>
+    <text x="716" y="176" fill="#888">MCP</text>
+    <text x="1156" y="425">WebSocket</text>
+  </g>
+</svg>
