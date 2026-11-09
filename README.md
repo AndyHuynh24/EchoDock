@@ -4,7 +4,7 @@ Alexa+ for your desk. Ask out loud and Dock controls your computer and helps you
 
 Built for the Amazon Developer Hackathon (Alexa+ track, October 2026).
 
-![Architecture](docs/diagrams/01-architecture.png)
+![Architecture](docs/diagrams/01-architecture.svg)
 
 ## How it works
 
