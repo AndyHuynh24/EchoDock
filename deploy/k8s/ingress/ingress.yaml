@@ -1,0 +1,31 @@
+# Optional: reach the server at http://localhost:8081 through ingress-nginx
+# instead of `kubectl port-forward`. Install with `make ingress`.
+#
+# ingress-nginx passes WebSocket upgrades through by default; the only thing
+# WebSockets need is longer timeouts, because the agent and phone sockets stay
+# open for hours and nginx would otherwise close idle ones after 60 s.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dock-server
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Screenshots for app help can be a few MB.
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+spec:
+  ingressClassName: nginx
+  rules:
+    # A host is needed: on the catch-all server, ingress-nginx answers /healthz
+    # itself instead of passing it to Dock. To reach Dock by another name (e.g.
+    # your Mac's IP from a phone), add a rule for that host too.
+    - host: localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dock-server
+                port:
+                  name: http

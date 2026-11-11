@@ -1,0 +1,20 @@
+# Dock server on Kubernetes.  Apply with:  kubectl apply -k deploy/k8s
+# The Secret is NOT part of this list: create it first (see secret.example.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: echodock
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: echodock
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+images:
+  # Local default: the image built by `make image` and loaded into kind.
+  # CI overrides this with `kustomize edit set image`.
+  - name: dock-server
+    newName: dock-server
+    newTag: dev

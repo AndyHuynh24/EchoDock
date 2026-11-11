@@ -1,0 +1,3 @@
+# Real secrets. Only secret.example.yaml is committed.
+secret.yaml
+*.secret.yaml

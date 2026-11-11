@@ -1,0 +1,98 @@
+# Build the server image, deploy it to a throwaway kind cluster, and smoke-test it.
+# On pushes to main, the tested image is then pushed to GitHub Container Registry:
+#   ghcr.io/<owner>/echodock-server:latest and :sha-<commit>
+# No cloud account or secrets needed: the cluster lives only inside this job, and
+# the DOCK_TOKEN is random per run. GITHUB_TOKEN is used to push to ghcr.io.
+name: Server on Kubernetes
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: k8s-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write  # only used by the push step, which runs on main only
+
+jobs:
+  build-deploy-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: docker/setup-buildx-action@v4.4.1
+
+      # Image names and tags (lowercases the owner name, which ghcr.io requires).
+      - id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/echodock-server
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Build once and keep it in the local Docker; it's pushed later only if every test passes.
+      # dock-server:dev is the name the manifests use (deploy/k8s/kustomization.yaml).
+      - name: Build image
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: server
+          load: true
+          push: false
+          tags: |
+            dock-server:dev
+            ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.15.2
+        with:
+          version: v0.33.0
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+          config: deploy/kind/cluster.yaml
+          cluster_name: echodock
+
+      - name: Load image into kind
+        run: make load
+
+      - name: Create the Secret (random token for this run)
+        run: |
+          token=$(openssl rand -hex 16)
+          echo "::add-mask::$token"
+          DOCK_TOKEN="$token" make secret
+
+      - name: Deploy and wait for the pod to be ready
+        run: make deploy
+
+      - uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Smoke test (/healthz, MCP, auth, WebSocket)
+        run: make smoke
+
+      - name: Show cluster state on failure
+        if: failure()
+        run: |
+          kubectl --context kind-echodock -n echodock get all,pvc,events
+          kubectl --context kind-echodock -n echodock describe pods
+          kubectl --context kind-echodock -n echodock logs deployment/dock-server --tail=200 || true
+
+      - name: Log in to ghcr.io
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the tested image to ghcr.io
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do docker push "$tag"; done

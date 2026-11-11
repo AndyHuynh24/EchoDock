@@ -1,0 +1,7 @@
+# Optional add-on to deploy/k8s: an Ingress for ingress-nginx.
+#   kubectl apply -k deploy/k8s/ingress
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: echodock
+resources:
+  - ingress.yaml

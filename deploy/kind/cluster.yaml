@@ -1,0 +1,18 @@
+# Local kind cluster for Dock:  kind create cluster --config deploy/kind/cluster.yaml
+# One node. Port 8081 on your Mac goes to the ingress controller (only used if you
+# run `make ingress`; `make forward` works without it).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: echodock
+nodes:
+  - role: control-plane
+    labels:
+      ingress-ready: "true"  # ingress-nginx's kind manifest runs on nodes with this label
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8081
+        # Only this Mac can connect. To let a phone on your Wi-Fi in, change to
+        # 0.0.0.0, but note the setup page trusts the Host header to decide
+        # "this Mac", so anyone on the network could fake it and see your token.
+        listenAddress: "127.0.0.1"
+        protocol: TCP

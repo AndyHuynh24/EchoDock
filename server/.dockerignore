@@ -1,6 +1,19 @@
+# Keep the build context small, and keep secrets and local data out of the image.
 .venv/
 .data/
-__pycache__/
+**/__pycache__/
+*.pyc
 *.log
+.DS_Store
+.env
+.dock-token
+
+# Secrets: never bake these into an image.
 google_oauth_client.json
-evals/results/
+*.pem
+*.key
+
+# Not needed at run time.
+evals/
+Dockerfile
+.dockerignore

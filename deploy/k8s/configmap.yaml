@@ -1,0 +1,19 @@
+# Non-secret settings, passed to the server as environment variables.
+# Secrets (DOCK_TOKEN, AWS keys) go in the dock-server-secrets Secret instead (see secret.example.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dock-server-config
+data:
+  # Address shown on the setup page (phone link). Matches `make forward` (port 8000).
+  # Setting it also turns off the cloudflared tunnel, which isn't in the image anyway.
+  DOCK_PUBLIC_URL: "http://localhost:8000"
+  # Don't upload the phone app to S3 from inside the cluster.
+  DOCK_WEBAPP: "off"
+  # Print traces to the pod log as JSON (and also keep them in .data/traces.jsonl).
+  DOCK_TRACE: "log"
+  AWS_DEFAULT_REGION: "us-east-1"
+  # Optional overrides (defaults are in dock_server/bedrock.py):
+  # DOCK_MODEL: "us.amazon.nova-2-lite-v1:0"
+  # DOCK_SMART_MODEL: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  # DOCK_MAIL_FOLDER: "INBOX"

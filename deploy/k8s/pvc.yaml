@@ -1,0 +1,11 @@
+# Keeps the server's saved data (/app/.data: notes, focus log, search library,
+# traces) across pod restarts. kind provides a default "standard" storage class.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dock-server-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

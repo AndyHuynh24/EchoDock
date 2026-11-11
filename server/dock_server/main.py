@@ -7,7 +7,10 @@ Run from the server folder:  uv run python -m dock_server.main
 """
 
 import asyncio
+import copy
+import logging
 import os
+import re
 import secrets
 import sys
 import time
@@ -84,6 +87,30 @@ def _aws_login_problem(error: BaseException) -> bool:
             return True
         error = error.__cause__ or error.__context__
     return False
+
+
+class HideTokens(logging.Filter):
+    """Keeps the token out of the log. The agent and phones send it in the WebSocket address."""
+
+    TOKEN_IN_URL = re.compile(r"(token=)[^&\s\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Change the arguments, not the whole message: uvicorn's access log formats them itself.
+        if isinstance(record.args, tuple):
+            record.args = tuple(self.TOKEN_IN_URL.sub(r"\1***", a) if isinstance(a, str) else a
+                                for a in record.args)
+        if isinstance(record.msg, str):
+            record.msg = self.TOKEN_IN_URL.sub(r"\1***", record.msg)
+        return True
+
+
+def log_config() -> dict:
+    """uvicorn's usual logging, with tokens hidden."""
+    config = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config["filters"] = {"hide_tokens": {"()": HideTokens}}
+    for handler in config["handlers"].values():
+        handler["filters"] = ["hide_tokens"]
+    return config
 
 
 class TokenAuth:
@@ -362,9 +389,14 @@ def create_app(token: str, port: int):
         await hub.push_phone("answered", text=text, reply=reply, quiet=quiet, spoken=bool(body.get("spoken")), **screen)
         return JSONResponse({"reply": reply, "quiet": quiet})
 
+    async def health_endpoint(request: Request) -> JSONResponse:
+        """For Kubernetes probes: the server is up. No token needed, no side effects."""
+        return JSONResponse({"ok": True})
+
     # Remote MCP clients use the public hostname; /mcp is protected by the token instead of the Host check.
     app = mcp.streamable_http_app(stateless_http=True, json_response=True,
                                   transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
+    app.router.routes.append(Route("/healthz", health_endpoint, methods=["GET"]))
     app.router.routes.append(Route("/api/voice", voice_endpoint, methods=["POST"]))
     app.router.routes.append(Route("/api/heard", heard_endpoint, methods=["POST"]))
     app.router.routes.append(Route("/api/skip_timer", skip_timer_endpoint, methods=["POST"]))
@@ -384,7 +416,8 @@ def main() -> None:
     webapp.start(STATIC_DIR)
     print(f"Dock server on http://localhost:{port}. Setup page: http://localhost:{port}/setup")
     # Use DOCK_HOST=0.0.0.0 in a container.
-    uvicorn.run(create_app(token, port), host=os.environ.get("DOCK_HOST", "127.0.0.1"), port=port)
+    uvicorn.run(create_app(token, port), host=os.environ.get("DOCK_HOST", "127.0.0.1"), port=port,
+                log_config=log_config())
 
 
 if __name__ == "__main__":
